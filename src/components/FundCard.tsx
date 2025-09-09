@@ -2,6 +2,7 @@ import { MutualFund } from '@/data/mutualFunds';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { TrendingUp, TrendingDown, Shield, DollarSign } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 interface FundCardProps {
   fund: MutualFund & { score?: number; rank?: number };
@@ -9,6 +10,7 @@ interface FundCardProps {
 }
 
 export function FundCard({ fund, showScore = false }: FundCardProps) {
+  const navigate = useNavigate();
   const formatReturn = (value: number) => {
     return value > 0 ? `+${value.toFixed(2)}%` : `${value.toFixed(2)}%`;
   };
@@ -30,7 +32,10 @@ export function FundCard({ fund, showScore = false }: FundCardProps) {
   };
 
   return (
-    <Card className="group hover:shadow-card transition-all duration-300 border border-border hover:border-primary/30">
+    <Card 
+      className="group hover:shadow-card transition-all duration-300 border border-border hover:border-primary/30 cursor-pointer"
+      onClick={() => navigate(`/fund/${fund.id}`)}
+    >
       <CardHeader className="pb-3">
         <div className="flex justify-between items-start gap-3">
           <div className="flex-1 min-w-0">
