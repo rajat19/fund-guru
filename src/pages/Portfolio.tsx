@@ -2,13 +2,32 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
-import { TrendingUp, TrendingDown, DollarSign, Target, PieChart as PieChartIcon, BarChart3 } from 'lucide-react';
+import {
+  PieChart,
+  Pie,
+  Cell,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from 'recharts';
+import {
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
+  Target,
+  PieChart as PieChartIcon,
+  BarChart3,
+} from 'lucide-react';
 
 const portfolioData = [
   { name: 'Equity', value: 65, amount: 158750, color: '#3b82f6' },
   { name: 'Debt', value: 25, amount: 61250, color: '#10b981' },
-  { name: 'Hybrid', value: 10, amount: 24500, color: '#f59e0b' }
+  { name: 'Hybrid', value: 10, amount: 24500, color: '#f59e0b' },
 ];
 
 const holdings = [
@@ -21,7 +40,7 @@ const holdings = [
     units: 1450.25,
     allocation: 29.7,
     returns: 20.83,
-    dayChange: 2.5
+    dayChange: 2.5,
   },
   {
     id: '2',
@@ -32,7 +51,7 @@ const holdings = [
     units: 876.45,
     allocation: 15.6,
     returns: 15.76,
-    dayChange: -1.2
+    dayChange: -1.2,
   },
   {
     id: '3',
@@ -43,7 +62,7 @@ const holdings = [
     units: 4320.15,
     allocation: 19.9,
     returns: 8.0,
-    dayChange: 0.3
+    dayChange: 0.3,
   },
   {
     id: '4',
@@ -54,7 +73,7 @@ const holdings = [
     units: 1234.67,
     allocation: 11.4,
     returns: 13.47,
-    dayChange: 1.8
+    dayChange: 1.8,
   },
   {
     id: '5',
@@ -65,8 +84,8 @@ const holdings = [
     units: 567.89,
     allocation: 12.0,
     returns: 17.6,
-    dayChange: 3.1
-  }
+    dayChange: 3.1,
+  },
 ];
 
 const monthlyData = [
@@ -81,7 +100,7 @@ const monthlyData = [
   { month: 'Sep', invested: 135000, value: 151200 },
   { month: 'Oct', invested: 150000, value: 169500 },
   { month: 'Nov', invested: 165000, value: 188300 },
-  { month: 'Dec', invested: 180000, value: 216500 }
+  { month: 'Dec', invested: 180000, value: 216500 },
 ];
 
 export default function Portfolio() {
@@ -89,7 +108,10 @@ export default function Portfolio() {
   const totalCurrentValue = holdings.reduce((sum, holding) => sum + holding.currentValue, 0);
   const totalReturns = totalCurrentValue - totalInvested;
   const totalReturnPercentage = (totalReturns / totalInvested) * 100;
-  const todayChange = holdings.reduce((sum, holding) => sum + (holding.currentValue * holding.dayChange / 100), 0);
+  const todayChange = holdings.reduce(
+    (sum, holding) => sum + (holding.currentValue * holding.dayChange) / 100,
+    0,
+  );
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -112,37 +134,49 @@ export default function Portfolio() {
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2">
               <TrendingUp className="h-5 w-5 text-muted-foreground" />
               <div>
-                <div className="text-2xl font-bold text-profit">₹{totalCurrentValue.toLocaleString()}</div>
+                <div className="text-2xl font-bold text-profit">
+                  ₹{totalCurrentValue.toLocaleString()}
+                </div>
                 <div className="text-sm text-muted-foreground">Current Value</div>
               </div>
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2">
               <Target className="h-5 w-5 text-muted-foreground" />
               <div>
-                <div className="text-2xl font-bold text-profit">+₹{totalReturns.toLocaleString()}</div>
-                <div className="text-sm text-muted-foreground">Total Returns (+{totalReturnPercentage.toFixed(2)}%)</div>
+                <div className="text-2xl font-bold text-profit">
+                  +₹{totalReturns.toLocaleString()}
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Total Returns (+{totalReturnPercentage.toFixed(2)}%)
+                </div>
               </div>
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2">
-              {todayChange >= 0 ? <TrendingUp className="h-5 w-5 text-profit" /> : <TrendingDown className="h-5 w-5 text-loss" />}
+              {todayChange >= 0 ? (
+                <TrendingUp className="h-5 w-5 text-profit" />
+              ) : (
+                <TrendingDown className="h-5 w-5 text-loss" />
+              )}
               <div>
-                <div className={`text-2xl font-bold ${todayChange >= 0 ? 'text-profit' : 'text-loss'}`}>
+                <div
+                  className={`text-2xl font-bold ${todayChange >= 0 ? 'text-profit' : 'text-loss'}`}
+                >
                   {todayChange >= 0 ? '+' : ''}₹{todayChange.toFixed(0)}
                 </div>
                 <div className="text-sm text-muted-foreground">Today's Change</div>
@@ -187,7 +221,10 @@ export default function Portfolio() {
               {portfolioData.map((item) => (
                 <div key={item.name} className="flex justify-between items-center">
                   <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }}></div>
+                    <div
+                      className="w-3 h-3 rounded-full"
+                      style={{ backgroundColor: item.color }}
+                    ></div>
                     <span className="text-sm">{item.name}</span>
                   </div>
                   <span className="font-semibold">₹{item.amount.toLocaleString()}</span>
@@ -230,7 +267,7 @@ export default function Portfolio() {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            {holdings.map(holding => (
+            {holdings.map((holding) => (
               <div key={holding.id} className="border rounded-lg p-4">
                 <div className="flex justify-between items-start mb-3">
                   <div>
@@ -238,13 +275,16 @@ export default function Portfolio() {
                     <Badge variant="outline">{holding.category}</Badge>
                   </div>
                   <div className="text-right">
-                    <div className={`text-lg font-bold ${holding.dayChange >= 0 ? 'text-profit' : 'text-loss'}`}>
-                      {holding.dayChange >= 0 ? '+' : ''}{holding.dayChange}%
+                    <div
+                      className={`text-lg font-bold ${holding.dayChange >= 0 ? 'text-profit' : 'text-loss'}`}
+                    >
+                      {holding.dayChange >= 0 ? '+' : ''}
+                      {holding.dayChange}%
                     </div>
                     <div className="text-sm text-muted-foreground">Today</div>
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                   <div>
                     <div className="text-sm text-muted-foreground">Invested</div>
@@ -252,7 +292,9 @@ export default function Portfolio() {
                   </div>
                   <div>
                     <div className="text-sm text-muted-foreground">Current Value</div>
-                    <div className="font-semibold text-profit">₹{holding.currentValue.toLocaleString()}</div>
+                    <div className="font-semibold text-profit">
+                      ₹{holding.currentValue.toLocaleString()}
+                    </div>
                   </div>
                   <div>
                     <div className="text-sm text-muted-foreground">Returns</div>
@@ -267,7 +309,7 @@ export default function Portfolio() {
                     <div className="font-semibold">{holding.allocation}%</div>
                   </div>
                 </div>
-                
+
                 <div className="mt-3">
                   <Progress value={holding.allocation} className="h-2" />
                 </div>

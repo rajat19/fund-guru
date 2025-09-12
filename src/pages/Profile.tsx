@@ -3,7 +3,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
@@ -23,19 +29,19 @@ export default function Profile() {
     investmentExperience: '3-5 years',
     investmentGoals: 'Retirement planning, wealth creation',
     timeHorizon: '10+ years',
-    monthlyInvestmentCapacity: '₹25,000'
+    monthlyInvestmentCapacity: '₹25,000',
   });
 
   const handleSave = () => {
     setIsEditing(false);
     toast({
-      title: "Profile Updated",
-      description: "Your profile has been successfully updated.",
+      title: 'Profile Updated',
+      description: 'Your profile has been successfully updated.',
     });
   };
 
   const handleInputChange = (field: string, value: string) => {
-    setProfile(prev => ({ ...prev, [field]: value }));
+    setProfile((prev) => ({ ...prev, [field]: value }));
   };
 
   return (
@@ -46,9 +52,9 @@ export default function Profile() {
           <h1 className="text-3xl font-bold text-foreground">Profile</h1>
           <p className="text-muted-foreground">Manage your personal and investment information</p>
         </div>
-        <Button 
+        <Button
           onClick={isEditing ? handleSave : () => setIsEditing(true)}
-          variant={isEditing ? "default" : "outline"}
+          variant={isEditing ? 'default' : 'outline'}
         >
           {isEditing ? <Save className="h-4 w-4 mr-2" /> : <Edit2 className="h-4 w-4 mr-2" />}
           {isEditing ? 'Save Changes' : 'Edit Profile'}
@@ -69,7 +75,7 @@ export default function Profile() {
               <div>
                 <Label htmlFor="name">Full Name</Label>
                 {isEditing ? (
-                  <Input 
+                  <Input
                     id="name"
                     value={profile.name}
                     onChange={(e) => handleInputChange('name', e.target.value)}
@@ -81,7 +87,7 @@ export default function Profile() {
               <div>
                 <Label htmlFor="age">Age</Label>
                 {isEditing ? (
-                  <Input 
+                  <Input
                     id="age"
                     type="number"
                     value={profile.age}
@@ -92,11 +98,11 @@ export default function Profile() {
                 )}
               </div>
             </div>
-            
+
             <div>
               <Label htmlFor="email">Email</Label>
               {isEditing ? (
-                <Input 
+                <Input
                   id="email"
                   type="email"
                   value={profile.email}
@@ -110,7 +116,7 @@ export default function Profile() {
             <div>
               <Label htmlFor="phone">Phone</Label>
               {isEditing ? (
-                <Input 
+                <Input
                   id="phone"
                   value={profile.phone}
                   onChange={(e) => handleInputChange('phone', e.target.value)}
@@ -123,7 +129,7 @@ export default function Profile() {
             <div>
               <Label htmlFor="occupation">Occupation</Label>
               {isEditing ? (
-                <Input 
+                <Input
                   id="occupation"
                   value={profile.occupation}
                   onChange={(e) => handleInputChange('occupation', e.target.value)}
@@ -136,7 +142,7 @@ export default function Profile() {
             <div>
               <Label htmlFor="income">Annual Income</Label>
               {isEditing ? (
-                <Input 
+                <Input
                   id="income"
                   value={profile.annualIncome}
                   onChange={(e) => handleInputChange('annualIncome', e.target.value)}
@@ -160,7 +166,10 @@ export default function Profile() {
             <div>
               <Label htmlFor="risk">Risk Tolerance</Label>
               {isEditing ? (
-                <Select value={profile.riskTolerance} onValueChange={(value) => handleInputChange('riskTolerance', value)}>
+                <Select
+                  value={profile.riskTolerance}
+                  onValueChange={(value) => handleInputChange('riskTolerance', value)}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -171,7 +180,15 @@ export default function Profile() {
                   </SelectContent>
                 </Select>
               ) : (
-                <Badge variant={profile.riskTolerance === 'Low' ? 'default' : profile.riskTolerance === 'Moderate' ? 'secondary' : 'destructive'}>
+                <Badge
+                  variant={
+                    profile.riskTolerance === 'Low'
+                      ? 'default'
+                      : profile.riskTolerance === 'Moderate'
+                        ? 'secondary'
+                        : 'destructive'
+                  }
+                >
                   {profile.riskTolerance}
                 </Badge>
               )}
@@ -180,7 +197,10 @@ export default function Profile() {
             <div>
               <Label htmlFor="experience">Investment Experience</Label>
               {isEditing ? (
-                <Select value={profile.investmentExperience} onValueChange={(value) => handleInputChange('investmentExperience', value)}>
+                <Select
+                  value={profile.investmentExperience}
+                  onValueChange={(value) => handleInputChange('investmentExperience', value)}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -199,7 +219,10 @@ export default function Profile() {
             <div>
               <Label htmlFor="horizon">Time Horizon</Label>
               {isEditing ? (
-                <Select value={profile.timeHorizon} onValueChange={(value) => handleInputChange('timeHorizon', value)}>
+                <Select
+                  value={profile.timeHorizon}
+                  onValueChange={(value) => handleInputChange('timeHorizon', value)}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -219,7 +242,7 @@ export default function Profile() {
             <div>
               <Label htmlFor="capacity">Monthly Investment Capacity</Label>
               {isEditing ? (
-                <Input 
+                <Input
                   id="capacity"
                   value={profile.monthlyInvestmentCapacity}
                   onChange={(e) => handleInputChange('monthlyInvestmentCapacity', e.target.value)}
@@ -232,7 +255,7 @@ export default function Profile() {
             <div>
               <Label htmlFor="goals">Investment Goals</Label>
               {isEditing ? (
-                <Textarea 
+                <Textarea
                   id="goals"
                   value={profile.investmentGoals}
                   onChange={(e) => handleInputChange('investmentGoals', e.target.value)}

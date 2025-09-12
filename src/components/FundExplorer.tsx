@@ -1,75 +1,102 @@
 import { useState } from 'react';
-import { MutualFund, mutualFundsData } from '@/data/mutualFunds';
-import { rankFunds } from '@/utils/scoringEngine';
+import { useMutualFunds, MutualFundsFilters } from '@/hooks/useMutualFunds';
 import { FundCard } from './FundCard';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Search, Filter, BarChart3, SortAsc, SortDesc } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Separator } from '@/components/ui/separator';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import {
+  Search,
+  SlidersHorizontal,
+  BarChart3,
+  TrendingUp,
+  Shield,
+  DollarSign,
+  SortAsc,
+  SortDesc,
+  GitCompare,
+} from 'lucide-react';
+import { MutualFund } from '@/types/mutualFund';
 
-type SortField = 'score' | 'oneYear' | 'threeYear' | 'fiveYear' | 'expenseRatio' | 'sharpeRatio' | 'aum';
+type SortField = 'returns' | 'expenseRatio' | 'sharpeRatio' | 'aum' | 'fundName';
 type SortDirection = 'asc' | 'desc';
 
 export function FundExplorer() {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [riskFilter, setRiskFilter] = useState<string>('all');
-  const [sortField, setSortField] = useState<SortField>('score');
+  const [filters, setFilters] = useState<MutualFundsFilters>({});
+  const [showFilters, setShowFilters] = useState(false);
+  const [selectedFunds, setSelectedFunds] = useState<string[]>([]);
+  const [showComparison, setShowComparison] = useState(false);
+  const [sortField, setSortField] = useState<SortField>('returns');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [displayLimit, setDisplayLimit] = useState(20);
 
-  const rankedFunds = rankFunds(mutualFundsData);
+  const { data: allFunds = [], isLoading, error } = useMutualFunds(filters);
 
-  const filteredAndSortedFunds = rankedFunds
-    .filter(fund => {
-      const matchesSearch = fund.schemeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                           fund.fundHouse.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesCategory = categoryFilter === 'all' || fund.category === categoryFilter;
-      const matchesRisk = riskFilter === 'all' || fund.riskLevel === riskFilter;
-      
-      return matchesSearch && matchesCategory && matchesRisk;
-    })
+  // Sort funds based on selected criteria and limit to top 20
+  const sortedFunds = [...allFunds]
     .sort((a, b) => {
       let aValue: number;
       let bValue: number;
 
       switch (sortField) {
-        case 'score':
-          aValue = a.score;
-          bValue = b.score;
-          break;
-        case 'oneYear':
-          aValue = a.returns.oneYear;
-          bValue = b.returns.oneYear;
-          break;
-        case 'threeYear':
-          aValue = a.returns.threeYear;
-          bValue = b.returns.threeYear;
-          break;
-        case 'fiveYear':
-          aValue = a.returns.fiveYear;
-          bValue = b.returns.fiveYear;
+        case 'returns':
+          aValue = a.returns.oneYear || 0;
+          bValue = b.returns.oneYear || 0;
           break;
         case 'expenseRatio':
-          aValue = a.expenseRatio;
-          bValue = b.expenseRatio;
+          aValue = a.expenseRatio || 0;
+          bValue = b.expenseRatio || 0;
           break;
         case 'sharpeRatio':
-          aValue = a.sharpeRatio;
-          bValue = b.sharpeRatio;
+          aValue = a.ratios.sharpeRatio || 0;
+          bValue = b.ratios.sharpeRatio || 0;
           break;
         case 'aum':
-          aValue = a.aum;
-          bValue = b.aum;
+          aValue = a.aum || 0;
+          bValue = b.aum || 0;
           break;
+        case 'fundName':
+          return sortDirection === 'desc'
+            ? b.fundName.localeCompare(a.fundName)
+            : a.fundName.localeCompare(b.fundName);
         default:
-          aValue = a.score;
-          bValue = b.score;
+          aValue = a.returns.oneYear || 0;
+          bValue = b.returns.oneYear || 0;
       }
 
       return sortDirection === 'desc' ? bValue - aValue : aValue - bValue;
-    });
+    })
+    .slice(0, displayLimit);
+
+  const handleFilterChange = (
+    key: keyof MutualFundsFilters,
+    value: string | number | undefined,
+  ) => {
+    setFilters((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  const clearFilters = () => {
+    setFilters({});
+  };
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -80,106 +107,575 @@ export function FundExplorer() {
     }
   };
 
+  const activeFiltersCount = Object.values(filters).filter(Boolean).length;
+
+  const handleFundSelection = (fundId: string) => {
+    setSelectedFunds((prev) => {
+      if (prev.includes(fundId)) {
+        return prev.filter((id) => id !== fundId);
+      } else if (prev.length < 4) {
+        // Limit to 4 funds for comparison
+        return [...prev, fundId];
+      }
+      return prev;
+    });
+  };
+
+  const selectedFundObjects = sortedFunds.filter((fund) => selectedFunds.includes(fund.id));
+
   const SortButton = ({ field, children }: { field: SortField; children: React.ReactNode }) => (
     <Button
-      variant={sortField === field ? "default" : "ghost"}
+      variant={sortField === field ? 'default' : 'ghost'}
       size="sm"
       onClick={() => handleSort(field)}
       className="h-8"
     >
       {children}
-      {sortField === field && (
-        sortDirection === 'desc' ? <SortDesc className="ml-1 h-3 w-3" /> : <SortAsc className="ml-1 h-3 w-3" />
-      )}
+      {sortField === field &&
+        (sortDirection === 'desc' ? (
+          <SortDesc className="ml-1 h-3 w-3" />
+        ) : (
+          <SortAsc className="ml-1 h-3 w-3" />
+        ))}
     </Button>
   );
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center space-y-2">
+          <Search className="h-8 w-8 animate-pulse mx-auto text-primary" />
+          <p className="text-muted-foreground">Searching mutual funds...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center space-y-4">
+        <p className="text-destructive">Error loading funds: {error.message}</p>
+        <Button onClick={() => window.location.reload()}>Reload</Button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <BarChart3 className="h-5 w-5 text-primary" />
-            Fund Explorer
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="h-5 w-5 text-primary" />
+              Fund Explorer
+            </CardTitle>
+            <Badge variant="secondary" className="text-xs">
+              Top {displayLimit} Results
+            </Badge>
+          </div>
         </CardHeader>
-        <CardContent>
-          {/* Search and Filters */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-6">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search funds or fund houses..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10"
-              />
+        <CardContent className="space-y-6">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                <Input
+                  placeholder="Search funds by name or fund house..."
+                  value={filters.searchTerm || ''}
+                  onChange={(e) => handleFilterChange('searchTerm', e.target.value)}
+                  className="pl-10"
+                />
+              </div>
             </div>
-            
-            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-full sm:w-40">
-                <SelectValue placeholder="Category" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Categories</SelectItem>
-                <SelectItem value="Equity">Equity</SelectItem>
-                <SelectItem value="Debt">Debt</SelectItem>
-                <SelectItem value="Hybrid">Hybrid</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Select value={riskFilter} onValueChange={setRiskFilter}>
-              <SelectTrigger className="w-full sm:w-32">
-                <SelectValue placeholder="Risk" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Risk</SelectItem>
-                <SelectItem value="Low">Low</SelectItem>
-                <SelectItem value="Moderate">Moderate</SelectItem>
-                <SelectItem value="High">High</SelectItem>
-              </SelectContent>
-            </Select>
+            <Button
+              variant="outline"
+              onClick={() => setShowFilters(!showFilters)}
+              className="whitespace-nowrap relative"
+            >
+              <SlidersHorizontal className="h-4 w-4 mr-2" />
+              Filters
+              {activeFiltersCount > 0 && (
+                <Badge variant="secondary" className="ml-2 h-5 w-5 p-0 text-xs">
+                  {activeFiltersCount}
+                </Badge>
+              )}
+            </Button>
+            {selectedFunds.length > 0 && (
+              <Dialog open={showComparison} onOpenChange={setShowComparison}>
+                <DialogTrigger asChild>
+                  <Button variant="default" className="whitespace-nowrap">
+                    <GitCompare className="h-4 w-4 mr-2" />
+                    Compare ({selectedFunds.length})
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle>Fund Comparison</DialogTitle>
+                  </DialogHeader>
+                  <FundComparison funds={selectedFundObjects} />
+                </DialogContent>
+              </Dialog>
+            )}
           </div>
 
           {/* Sort Options */}
-          <div className="flex flex-wrap gap-2 mb-4">
+          <div className="flex flex-wrap gap-2">
             <span className="text-sm text-muted-foreground self-center">Sort by:</span>
-            <SortButton field="score">Score</SortButton>
-            <SortButton field="oneYear">1Y Return</SortButton>
-            <SortButton field="threeYear">3Y Return</SortButton>
-            <SortButton field="fiveYear">5Y Return</SortButton>
-            <SortButton field="expenseRatio">Expense</SortButton>
-            <SortButton field="sharpeRatio">Sharpe</SortButton>
+            <SortButton field="returns">1Y Return</SortButton>
+            <SortButton field="expenseRatio">Expense Ratio</SortButton>
+            <SortButton field="sharpeRatio">Sharpe Ratio</SortButton>
             <SortButton field="aum">AUM</SortButton>
+            <SortButton field="fundName">Name</SortButton>
           </div>
 
-          {/* Results Count */}
-          <div className="flex items-center gap-2 mb-4">
-            <Badge variant="secondary">
-              {filteredAndSortedFunds.length} fund{filteredAndSortedFunds.length !== 1 ? 's' : ''} found
-            </Badge>
+          {showFilters && (
+            <div className="space-y-4 p-4 bg-muted/30 rounded-lg">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Category</label>
+                  <Select
+                    value={filters.category || ''}
+                    onValueChange={(value) => handleFilterChange('category', value || undefined)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="All Categories" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">All Categories</SelectItem>
+                      <SelectItem value="Equity">Equity</SelectItem>
+                      <SelectItem value="Debt">Debt</SelectItem>
+                      <SelectItem value="Hybrid">Hybrid</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Risk Level</label>
+                  <Select
+                    value={filters.riskLevel || ''}
+                    onValueChange={(value) => handleFilterChange('riskLevel', value || undefined)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="All Risk Levels" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">All Risk Levels</SelectItem>
+                      <SelectItem value="Low">Low Risk</SelectItem>
+                      <SelectItem value="Moderate">Moderate Risk</SelectItem>
+                      <SelectItem value="High">High Risk</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Min 1Y Return (%)</label>
+                  <Input
+                    type="number"
+                    placeholder="0"
+                    value={filters.minReturn || ''}
+                    onChange={(e) =>
+                      handleFilterChange(
+                        'minReturn',
+                        e.target.value ? Number(e.target.value) : undefined,
+                      )
+                    }
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Max Expense Ratio (%)</label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    placeholder="2.0"
+                    value={filters.maxExpenseRatio || ''}
+                    onChange={(e) =>
+                      handleFilterChange(
+                        'maxExpenseRatio',
+                        e.target.value ? Number(e.target.value) : undefined,
+                      )
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <Button
+                  onClick={clearFilters}
+                  variant="ghost"
+                  size="sm"
+                  disabled={activeFiltersCount === 0}
+                >
+                  Clear All Filters
+                </Button>
+                {activeFiltersCount > 0 && (
+                  <Badge variant="outline">{sortedFunds.length} funds found</Badge>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">
+                  Showing top {sortedFunds.length} funds {allFunds.length > displayLimit && `(of ${allFunds.length} total)`}
+                  {selectedFunds.length > 0 && (
+                    <span className="ml-2">• {selectedFunds.length} selected for comparison</span>
+                  )}
+                </p>
+                {allFunds.length > displayLimit && (
+                  <p className="text-xs text-muted-foreground">
+                    Sorted by {sortField === 'returns' ? '1Y Returns' : 
+                              sortField === 'expenseRatio' ? 'Expense Ratio' :
+                              sortField === 'sharpeRatio' ? 'Sharpe Ratio' :
+                              sortField === 'aum' ? 'AUM' : 'Fund Name'} 
+                    ({sortDirection === 'desc' ? 'High to Low' : 'Low to High'})
+                  </p>
+                )}
+              </div>
+              {selectedFunds.length > 0 && (
+                <Button variant="outline" size="sm" onClick={() => setSelectedFunds([])}>
+                  Clear Selection
+                </Button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {sortedFunds.map((fund) => (
+                <div key={fund.id} className="relative">
+                  <div className="absolute top-2 right-2 z-10">
+                    <Checkbox
+                      checked={selectedFunds.includes(fund.id)}
+                      onCheckedChange={() => handleFundSelection(fund.id)}
+                      disabled={!selectedFunds.includes(fund.id) && selectedFunds.length >= 4}
+                      className="bg-white/90 backdrop-blur-sm"
+                    />
+                  </div>
+                  <FundCard fund={fund} showScore={true} />
+                </div>
+              ))}
+            </div>
+
+            {/* Load More Button */}
+            {allFunds.length > displayLimit && (
+              <div className="flex justify-center pt-6">
+                <Button 
+                  variant="outline" 
+                  onClick={() => setDisplayLimit(prev => Math.min(prev + 20, allFunds.length))}
+                  disabled={displayLimit >= allFunds.length}
+                >
+                  Load More ({Math.min(20, allFunds.length - displayLimit)} more)
+                </Button>
+              </div>
+            )}
+
+            {sortedFunds.length === 0 && (
+              <div className="text-center py-8">
+                <p className="text-muted-foreground">
+                  No mutual funds match your current search criteria.
+                </p>
+                <Button variant="outline" onClick={clearFilters} className="mt-4">
+                  Clear Filters
+                </Button>
+              </div>
+            )}
           </div>
+
+          {selectedFunds.length > 1 && (
+            <div className="mt-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Quick Comparison</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                      <span className="font-medium">Selected:</span>
+                      <p className="text-muted-foreground">{selectedFunds.length} funds</p>
+                    </div>
+                    <div>
+                      <span className="font-medium">Best 1Y Return:</span>
+                      <p className="text-green-600 font-medium">
+                        {selectedFundObjects.length > 0 &&
+                          Math.max(...selectedFundObjects.map((f) => f.returns.oneYear)).toFixed(1)}
+                        %
+                      </p>
+                    </div>
+                    <div>
+                      <span className="font-medium">Lowest Expense:</span>
+                      <p className="text-blue-600 font-medium">
+                        {selectedFundObjects.length > 0 &&
+                          Math.min(...selectedFundObjects.map((f) => f.expenseRatio)).toFixed(2)}
+                        %
+                      </p>
+                    </div>
+                    <div>
+                      <span className="font-medium">Highest Sharpe:</span>
+                      <p className="text-purple-600 font-medium">
+                        {selectedFundObjects.length > 0 &&
+                          Math.max(...selectedFundObjects.map((f) => f.ratios.sharpeRatio)).toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
 
-      {/* Fund Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredAndSortedFunds.map((fund) => (
-          <FundCard key={fund.id} fund={fund} showScore={true} />
-        ))}
+// Fund comparison component for detailed analysis
+function FundComparison({ funds }: { funds: MutualFund[] }) {
+  if (funds.length === 0) {
+    return <div className="text-center py-8">No funds selected for comparison.</div>;
+  }
+
+  const metrics = [
+    { key: 'oneYear', label: '1 Year Return', suffix: '%', color: 'text-green-600' },
+    { key: 'threeYear', label: '3 Year Return', suffix: '%', color: 'text-green-600' },
+    { key: 'fiveYear', label: '5 Year Return', suffix: '%', color: 'text-green-600' },
+    {
+      key: 'expenseRatio',
+      label: 'Expense Ratio',
+      suffix: '%',
+      color: 'text-blue-600',
+      lower: true,
+    },
+    { key: 'sharpeRatio', label: 'Sharpe Ratio', suffix: '', color: 'text-purple-600' },
+    { key: 'sortinoRatio', label: 'Sortino Ratio', suffix: '', color: 'text-purple-600' },
+    { key: 'alpha', label: 'Alpha', suffix: '', color: 'text-orange-600' },
+    { key: 'beta', label: 'Beta', suffix: '', color: 'text-gray-600' },
+    { key: 'aum', label: 'AUM (₹ Cr)', suffix: '', color: 'text-indigo-600' },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Basic Information */}
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="border-b">
+              <th className="text-left p-3 font-semibold">Fund Details</th>
+              {funds.map((fund) => (
+                <th key={fund.id} className="text-left p-3 font-medium text-sm">
+                  <div className="space-y-1">
+                    <div className="font-semibold text-foreground">{fund.schemeName}</div>
+                    <div className="text-xs text-muted-foreground">{fund.fundHouse}</div>
+                    <Badge variant="outline" className="text-xs">
+                      {fund.category}
+                    </Badge>
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-b hover:bg-muted/50">
+              <td className="p-3 font-medium flex items-center gap-2">
+                <Shield className="h-4 w-4 text-muted-foreground" />
+                Risk Level
+              </td>
+              {funds.map((fund) => (
+                <td key={fund.id} className="p-3">
+                  <Badge
+                    variant={
+                      fund.riskMetrics.risk === 'High'
+                        ? 'destructive'
+                        : fund.riskMetrics.risk === 'Moderate'
+                          ? 'secondary'
+                          : 'outline'
+                    }
+                  >
+                    {fund.riskMetrics.risk}
+                  </Badge>
+                </td>
+              ))}
+            </tr>
+            <tr className="border-b hover:bg-muted/50">
+              <td className="p-3 font-medium">Sub Category</td>
+              {funds.map((fund) => (
+                <td key={fund.id} className="p-3 text-sm">
+                  {fund.subCategory}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
       </div>
 
-      {filteredAndSortedFunds.length === 0 && (
-        <Card>
-          <CardContent className="text-center py-12">
-            <Filter className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No funds found</h3>
-            <p className="text-muted-foreground">
-              Try adjusting your search criteria or filters to find more funds.
-            </p>
-          </CardContent>
-        </Card>
-      )}
+      <Separator />
+
+      {/* Performance Metrics */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-semibold flex items-center gap-2">
+          <TrendingUp className="h-5 w-5" />
+          Performance Comparison
+        </h3>
+
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="border-b">
+                <th className="text-left p-3 font-semibold">Metrics</th>
+                {funds.map((fund) => (
+                  <th key={fund.id} className="text-center p-3 font-medium text-sm">
+                    {fund.schemeName.split(' ').slice(0, 2).join(' ')}
+                  </th>
+                ))}
+                <th className="text-center p-3 font-medium text-sm">Best</th>
+              </tr>
+            </thead>
+            <tbody>
+              {metrics.map((metric) => {
+                const values = funds.map((fund) => {
+                  if (metric.key === 'aum') return fund.aum;
+                  if (metric.key === 'expenseRatio') return fund.expenseRatio;
+                  if (metric.key in fund.returns) {
+                    return fund.returns[metric.key as keyof typeof fund.returns];
+                  }
+                  if (metric.key in fund.ratios) {
+                    return fund.ratios[metric.key as keyof typeof fund.ratios];
+                  }
+                  return null;
+                });
+
+                const numericValues = values.filter((v): v is number => v !== null);
+                const bestValue =
+                  numericValues.length > 0
+                    ? metric.lower
+                      ? Math.min(...numericValues)
+                      : Math.max(...numericValues)
+                    : null;
+
+                return (
+                  <tr key={metric.key} className="border-b hover:bg-muted/50">
+                    <td className="p-3 font-medium">{metric.label}</td>
+                    {funds.map((fund, index) => {
+                      const value = values[index];
+                      const isNumerical = typeof value === 'number';
+                      const displayValue = isNumerical
+                        ? metric.key === 'aum'
+                          ? value.toLocaleString()
+                          : value.toFixed(2)
+                        : 'N/A';
+
+                      const isBest = isNumerical && value === bestValue;
+
+                      return (
+                        <td
+                          key={fund.id}
+                          className={`p-3 text-center ${isBest ? 'font-bold ' + metric.color : 'text-muted-foreground'}`}
+                        >
+                          {displayValue}
+                          {metric.suffix}
+                          {isBest && <span className="ml-1">🏆</span>}
+                        </td>
+                      );
+                    })}
+                    <td className={`p-3 text-center font-bold ${metric.color}`}>
+                      {typeof bestValue === 'number'
+                        ? (metric.key === 'aum'
+                            ? bestValue.toLocaleString()
+                            : bestValue.toFixed(2)) + metric.suffix
+                        : 'N/A'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <Separator />
+
+      {/* Key Highlights */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-semibold flex items-center gap-2">
+          <DollarSign className="h-5 w-5" />
+          Key Highlights
+        </h3>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-green-600">
+                  {Math.max(...funds.map((f) => f.returns.oneYear)).toFixed(1)}%
+                </div>
+                <div className="text-sm text-muted-foreground">Highest 1Y Return</div>
+                <div className="text-xs mt-1">
+                  {funds
+                    .find(
+                      (f) => f.returns.oneYear === Math.max(...funds.map((f) => f.returns.oneYear)),
+                    )
+                    ?.schemeName.split(' ')
+                    .slice(0, 2)
+                    .join(' ')}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-blue-600">
+                  {Math.min(...funds.map((f) => f.expenseRatio)).toFixed(2)}%
+                </div>
+                <div className="text-sm text-muted-foreground">Lowest Expense</div>
+                <div className="text-xs mt-1">
+                  {funds
+                    .find((f) => f.expenseRatio === Math.min(...funds.map((f) => f.expenseRatio)))
+                    ?.schemeName.split(' ')
+                    .slice(0, 2)
+                    .join(' ')}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-purple-600">
+                  {Math.max(...funds.map((f) => f.ratios.sharpeRatio)).toFixed(2)}
+                </div>
+                <div className="text-sm text-muted-foreground">Best Sharpe Ratio</div>
+                <div className="text-xs mt-1">
+                  {funds
+                    .find((f) => f.ratios.sharpeRatio === Math.max(...funds.map((f) => f.ratios.sharpeRatio)))
+                    ?.schemeName.split(' ')
+                    .slice(0, 2)
+                    .join(' ')}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-indigo-600">
+                  ₹{Math.max(...funds.map((f) => f.aum)).toLocaleString()}Cr
+                </div>
+                <div className="text-sm text-muted-foreground">Largest AUM</div>
+                <div className="text-xs mt-1">
+                  {funds
+                    .find((f) => f.aum === Math.max(...funds.map((f) => f.aum)))
+                    ?.schemeName.split(' ')
+                    .slice(0, 2)
+                    .join(' ')}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

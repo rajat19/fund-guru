@@ -1,24 +1,64 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { mutualFundsData } from '@/data/mutualFunds';
+import { useFundById } from '@/hooks/useMutualFunds';
 import { calculateFundScore } from '@/utils/scoringEngine';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, TrendingUp, Shield, Target, Activity, DollarSign, BarChart3, PieChart } from 'lucide-react';
+import {
+  ArrowLeft,
+  TrendingUp,
+  Shield,
+  Target,
+  Activity,
+  DollarSign,
+  BarChart3,
+  PieChart,
+} from 'lucide-react';
 
 export default function FundDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  
-  const fund = mutualFundsData.find(f => f.id === id);
-  
+
+  const { data: fund, isLoading, error } = useFundById(id || '');
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Card className="w-96">
+          <CardContent className="pt-6 text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+            <p className="text-muted-foreground">Loading fund details...</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Card className="w-96">
+          <CardContent className="pt-6 text-center">
+            <h2 className="text-xl font-semibold mb-2">Error Loading Fund</h2>
+            <p className="text-muted-foreground mb-4">
+              Failed to load fund details. Please try again.
+            </p>
+            <Button onClick={() => navigate('/')}>Return to Dashboard</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (!fund) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Card className="w-96">
           <CardContent className="pt-6 text-center">
             <h2 className="text-xl font-semibold mb-2">Fund Not Found</h2>
-            <p className="text-muted-foreground mb-4">The requested mutual fund could not be found.</p>
+            <p className="text-muted-foreground mb-4">
+              The requested mutual fund could not be found.
+            </p>
             <Button onClick={() => navigate('/')}>Return to Dashboard</Button>
           </CardContent>
         </Card>
@@ -27,7 +67,7 @@ export default function FundDetail() {
   }
 
   const score = calculateFundScore(fund);
-  
+
   const formatReturn = (value: number) => {
     return value > 0 ? `+${value.toFixed(2)}%` : `${value.toFixed(2)}%`;
   };
@@ -41,10 +81,14 @@ export default function FundDetail() {
 
   const getRiskBadgeVariant = (risk: string) => {
     switch (risk) {
-      case 'Low': return 'default';
-      case 'Moderate': return 'secondary';
-      case 'High': return 'destructive';
-      default: return 'outline';
+      case 'Low':
+        return 'default';
+      case 'Moderate':
+        return 'secondary';
+      case 'High':
+        return 'destructive';
+      default:
+        return 'outline';
     }
   };
 
@@ -53,11 +97,7 @@ export default function FundDetail() {
       <div className="container mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">
-          <Button 
-            variant="outline" 
-            size="icon"
-            onClick={() => navigate('/')}
-          >
+          <Button variant="outline" size="icon" onClick={() => navigate('/')}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex-1">
@@ -94,7 +134,7 @@ export default function FundDetail() {
               </div>
               <div>
                 <div className="text-sm text-muted-foreground">Risk Level</div>
-                <Badge variant={getRiskBadgeVariant(fund.riskLevel)}>{fund.riskLevel}</Badge>
+                <Badge variant={getRiskBadgeVariant(fund.riskMetrics.risk)}>{fund.riskMetrics.risk}</Badge>
               </div>
             </div>
           </CardContent>
@@ -142,27 +182,27 @@ export default function FundDetail() {
               <div className="space-y-4">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Sharpe Ratio</span>
-                  <span className="font-semibold">{fund.sharpeRatio}</span>
+                  <span className="font-semibold">{fund.ratios.sharpeRatio?.toFixed(2) || 'N/A'}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Sortino Ratio</span>
-                  <span className="font-semibold">{fund.sortinoRatio}</span>
+                  <span className="font-semibold">{fund.ratios.sortinoRatio?.toFixed(2) || 'N/A'}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Alpha</span>
-                  <span className="font-semibold">{fund.alpha}</span>
+                  <span className="font-semibold">{fund.ratios.alpha?.toFixed(2) || 'N/A'}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Beta</span>
-                  <span className="font-semibold">{fund.beta}</span>
+                  <span className="font-semibold">{fund.ratios.beta?.toFixed(2) || 'N/A'}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Information Ratio</span>
-                  <span className="font-semibold">{fund.informationRatio}</span>
+                  <span className="font-semibold">{fund.ratios.informationRatio}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Standard Deviation</span>
-                  <span className="font-semibold">{fund.standardDeviation}%</span>
+                  <span className="font-semibold">{fund.ratios.standardDeviation}%</span>
                 </div>
               </div>
             </CardContent>
@@ -208,8 +248,19 @@ export default function FundDetail() {
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Best Return Period</span>
                   <span className="font-semibold text-profit">
-                    {Math.max(fund.returns.oneYear, fund.returns.threeYear, fund.returns.fiveYear) === fund.returns.oneYear ? '1 Year' :
-                     Math.max(fund.returns.oneYear, fund.returns.threeYear, fund.returns.fiveYear) === fund.returns.threeYear ? '3 Years' : '5 Years'}
+                    {Math.max(
+                      fund.returns.oneYear,
+                      fund.returns.threeYear,
+                      fund.returns.fiveYear,
+                    ) === fund.returns.oneYear
+                      ? '1 Year'
+                      : Math.max(
+                            fund.returns.oneYear,
+                            fund.returns.threeYear,
+                            fund.returns.fiveYear,
+                          ) === fund.returns.threeYear
+                        ? '3 Years'
+                        : '5 Years'}
                   </span>
                 </div>
               </div>

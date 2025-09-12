@@ -3,12 +3,24 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { Plus, Edit2, Trash2, Play, Pause, Calendar, DollarSign, TrendingUp } from 'lucide-react';
-import { mutualFundsData } from '@/data/mutualFunds';
+import { useMutualFunds, useFundById } from '@/hooks/useMutualFunds';
 
 interface SIP {
   id: string;
@@ -25,6 +37,7 @@ interface SIP {
 
 export default function SIPManagement() {
   const { toast } = useToast();
+  const { data: allFunds = [], isLoading: fundsLoading } = useMutualFunds();
   const [sips, setSips] = useState<SIP[]>([
     {
       id: '1',
@@ -36,7 +49,7 @@ export default function SIPManagement() {
       status: 'Active',
       investedAmount: 60000,
       currentValue: 72500,
-      returns: 20.83
+      returns: 20.83,
     },
     {
       id: '2',
@@ -48,7 +61,7 @@ export default function SIPManagement() {
       status: 'Active',
       investedAmount: 33000,
       currentValue: 38200,
-      returns: 15.76
+      returns: 15.76,
     },
     {
       id: '3',
@@ -60,29 +73,29 @@ export default function SIPManagement() {
       status: 'Paused',
       investedAmount: 16000,
       currentValue: 18300,
-      returns: 14.38
-    }
+      returns: 14.38,
+    },
   ]);
-  
+
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [newSIP, setNewSIP] = useState({
     fundId: '',
     amount: '',
     frequency: 'Monthly',
-    startDate: ''
+    startDate: '',
   });
 
   const handleAddSIP = () => {
     if (!newSIP.fundId || !newSIP.amount || !newSIP.startDate) {
       toast({
-        title: "Error",
-        description: "Please fill all required fields.",
-        variant: "destructive"
+        title: 'Error',
+        description: 'Please fill all required fields.',
+        variant: 'destructive',
       });
       return;
     }
 
-    const fund = mutualFundsData.find(f => f.id === newSIP.fundId);
+    const fund = allFunds.find((f) => f.id === newSIP.fundId);
     if (!fund) return;
 
     const sip: SIP = {
@@ -95,41 +108,45 @@ export default function SIPManagement() {
       status: 'Active',
       investedAmount: 0,
       currentValue: 0,
-      returns: 0
+      returns: 0,
     };
 
-    setSips(prev => [...prev, sip]);
+    setSips((prev) => [...prev, sip]);
     setNewSIP({ fundId: '', amount: '', frequency: 'Monthly', startDate: '' });
     setIsAddDialogOpen(false);
-    
+
     toast({
-      title: "SIP Added",
+      title: 'SIP Added',
       description: `SIP for ${fund.schemeName} has been successfully created.`,
     });
   };
 
   const toggleSIPStatus = (id: string) => {
-    setSips(prev => prev.map(sip => 
-      sip.id === id 
-        ? { ...sip, status: sip.status === 'Active' ? 'Paused' : 'Active' }
-        : sip
-    ));
+    setSips((prev) =>
+      prev.map((sip) =>
+        sip.id === id ? { ...sip, status: sip.status === 'Active' ? 'Paused' : 'Active' } : sip,
+      ),
+    );
   };
 
   const deleteSIP = (id: string) => {
-    setSips(prev => prev.filter(sip => sip.id !== id));
+    setSips((prev) => prev.filter((sip) => sip.id !== id));
     toast({
-      title: "SIP Deleted",
-      description: "SIP has been successfully deleted.",
+      title: 'SIP Deleted',
+      description: 'SIP has been successfully deleted.',
     });
   };
 
   const getStatusBadgeVariant = (status: string) => {
     switch (status) {
-      case 'Active': return 'default';
-      case 'Paused': return 'secondary';
-      case 'Stopped': return 'destructive';
-      default: return 'outline';
+      case 'Active':
+        return 'default';
+      case 'Paused':
+        return 'secondary';
+      case 'Stopped':
+        return 'destructive';
+      default:
+        return 'outline';
     }
   };
 
@@ -146,7 +163,7 @@ export default function SIPManagement() {
           <h1 className="text-3xl font-bold text-foreground">SIP Management</h1>
           <p className="text-muted-foreground">Manage your systematic investment plans</p>
         </div>
-        
+
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
           <DialogTrigger asChild>
             <Button>
@@ -161,34 +178,44 @@ export default function SIPManagement() {
             <div className="space-y-4">
               <div>
                 <Label htmlFor="fund">Select Fund</Label>
-                <Select value={newSIP.fundId} onValueChange={(value) => setNewSIP(prev => ({ ...prev, fundId: value }))}>
+                <Select
+                  value={newSIP.fundId}
+                  onValueChange={(value) => setNewSIP((prev) => ({ ...prev, fundId: value }))}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Choose a mutual fund" />
                   </SelectTrigger>
                   <SelectContent>
-                    {mutualFundsData.map(fund => (
-                      <SelectItem key={fund.id} value={fund.id}>
-                        {fund.schemeName}
-                      </SelectItem>
-                    ))}
+                    {fundsLoading ? (
+                      <SelectItem value="" disabled>Loading funds...</SelectItem>
+                    ) : (
+                      allFunds.map((fund) => (
+                        <SelectItem key={fund.id} value={fund.id}>
+                          {fund.schemeName}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
               </div>
-              
+
               <div>
                 <Label htmlFor="amount">SIP Amount (₹)</Label>
-                <Input 
+                <Input
                   id="amount"
                   type="number"
                   placeholder="5000"
                   value={newSIP.amount}
-                  onChange={(e) => setNewSIP(prev => ({ ...prev, amount: e.target.value }))}
+                  onChange={(e) => setNewSIP((prev) => ({ ...prev, amount: e.target.value }))}
                 />
               </div>
-              
+
               <div>
                 <Label htmlFor="frequency">Frequency</Label>
-                <Select value={newSIP.frequency} onValueChange={(value) => setNewSIP(prev => ({ ...prev, frequency: value }))}>
+                <Select
+                  value={newSIP.frequency}
+                  onValueChange={(value) => setNewSIP((prev) => ({ ...prev, frequency: value }))}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -199,20 +226,28 @@ export default function SIPManagement() {
                   </SelectContent>
                 </Select>
               </div>
-              
+
               <div>
                 <Label htmlFor="startDate">Start Date</Label>
-                <Input 
+                <Input
                   id="startDate"
                   type="date"
                   value={newSIP.startDate}
-                  onChange={(e) => setNewSIP(prev => ({ ...prev, startDate: e.target.value }))}
+                  onChange={(e) => setNewSIP((prev) => ({ ...prev, startDate: e.target.value }))}
                 />
               </div>
-              
+
               <div className="flex gap-2 pt-4">
-                <Button onClick={handleAddSIP} className="flex-1">Create SIP</Button>
-                <Button variant="outline" onClick={() => setIsAddDialogOpen(false)} className="flex-1">Cancel</Button>
+                <Button onClick={handleAddSIP} className="flex-1">
+                  Create SIP
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setIsAddDialogOpen(false)}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
               </div>
             </div>
           </DialogContent>
@@ -232,37 +267,43 @@ export default function SIPManagement() {
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2">
               <TrendingUp className="h-5 w-5 text-muted-foreground" />
               <div>
-                <div className="text-2xl font-bold text-profit">₹{totalCurrentValue.toLocaleString()}</div>
+                <div className="text-2xl font-bold text-profit">
+                  ₹{totalCurrentValue.toLocaleString()}
+                </div>
                 <div className="text-sm text-muted-foreground">Current Value</div>
               </div>
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2">
               <TrendingUp className="h-5 w-5 text-muted-foreground" />
               <div>
-                <div className="text-2xl font-bold text-profit">+₹{totalReturns.toLocaleString()}</div>
+                <div className="text-2xl font-bold text-profit">
+                  +₹{totalReturns.toLocaleString()}
+                </div>
                 <div className="text-sm text-muted-foreground">Total Returns</div>
               </div>
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2">
               <Calendar className="h-5 w-5 text-muted-foreground" />
               <div>
-                <div className="text-2xl font-bold">{sips.filter(sip => sip.status === 'Active').length}</div>
+                <div className="text-2xl font-bold">
+                  {sips.filter((sip) => sip.status === 'Active').length}
+                </div>
                 <div className="text-sm text-muted-foreground">Active SIPs</div>
               </div>
             </div>
@@ -277,7 +318,7 @@ export default function SIPManagement() {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            {sips.map(sip => (
+            {sips.map((sip) => (
               <div key={sip.id} className="border rounded-lg p-4">
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
@@ -297,7 +338,9 @@ export default function SIPManagement() {
                       </div>
                       <div>
                         <div className="text-sm text-muted-foreground">Current Value</div>
-                        <div className="font-semibold text-profit">₹{sip.currentValue.toLocaleString()}</div>
+                        <div className="font-semibold text-profit">
+                          ₹{sip.currentValue.toLocaleString()}
+                        </div>
                       </div>
                       <div>
                         <div className="text-sm text-muted-foreground">Returns</div>
@@ -305,33 +348,29 @@ export default function SIPManagement() {
                       </div>
                     </div>
                   </div>
-                  
+
                   <div className="flex items-center gap-2 ml-4">
-                    <Badge variant={getStatusBadgeVariant(sip.status)}>
-                      {sip.status}
-                    </Badge>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => toggleSIPStatus(sip.id)}
-                    >
-                      {sip.status === 'Active' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                    <Badge variant={getStatusBadgeVariant(sip.status)}>{sip.status}</Badge>
+                    <Button variant="outline" size="icon" onClick={() => toggleSIPStatus(sip.id)}>
+                      {sip.status === 'Active' ? (
+                        <Pause className="h-4 w-4" />
+                      ) : (
+                        <Play className="h-4 w-4" />
+                      )}
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => deleteSIP(sip.id)}
-                    >
+                    <Button variant="outline" size="icon" onClick={() => deleteSIP(sip.id)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
                 </div>
               </div>
             ))}
-            
+
             {sips.length === 0 && (
               <div className="text-center py-8">
-                <p className="text-muted-foreground">No SIPs found. Create your first SIP to get started.</p>
+                <p className="text-muted-foreground">
+                  No SIPs found. Create your first SIP to get started.
+                </p>
               </div>
             )}
           </div>

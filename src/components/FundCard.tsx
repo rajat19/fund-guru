@@ -1,4 +1,4 @@
-import { MutualFund } from '@/data/mutualFunds';
+import { MutualFund } from '@/types/mutualFund';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { TrendingUp, TrendingDown, Shield, DollarSign } from 'lucide-react';
@@ -11,11 +11,13 @@ interface FundCardProps {
 
 export function FundCard({ fund, showScore = false }: FundCardProps) {
   const navigate = useNavigate();
-  const formatReturn = (value: number) => {
+  const formatReturn = (value: number | null) => {
+    if (value === null) return 'N/A';
     return value > 0 ? `+${value.toFixed(2)}%` : `${value.toFixed(2)}%`;
   };
 
-  const getReturnColor = (value: number) => {
+  const getReturnColor = (value: number | null) => {
+    if (value === null) return 'text-muted-foreground';
     if (value > 15) return 'text-profit';
     if (value > 8) return 'text-secondary';
     if (value > 0) return 'text-muted-foreground';
@@ -24,15 +26,19 @@ export function FundCard({ fund, showScore = false }: FundCardProps) {
 
   const getRiskBadgeVariant = (risk: string) => {
     switch (risk) {
-      case 'Low': return 'default';
-      case 'Moderate': return 'secondary';
-      case 'High': return 'destructive';
-      default: return 'outline';
+      case 'Low':
+        return 'default';
+      case 'Moderate':
+        return 'secondary';
+      case 'High':
+        return 'destructive';
+      default:
+        return 'outline';
     }
   };
 
   return (
-    <Card 
+    <Card
       className="group hover:shadow-card transition-all duration-300 border border-border hover:border-primary/30 cursor-pointer"
       onClick={() => navigate(`/fund/${fund.id}`)}
     >
@@ -53,10 +59,12 @@ export function FundCard({ fund, showScore = false }: FundCardProps) {
         </div>
         <div className="flex gap-2 mt-2">
           <Badge variant="outline">{fund.category}</Badge>
-          <Badge variant={getRiskBadgeVariant(fund.riskLevel)}>{fund.riskLevel}</Badge>
+          <Badge variant={getRiskBadgeVariant(fund.riskMetrics.risk)}>
+            {fund.riskMetrics.risk}
+          </Badge>
         </div>
       </CardHeader>
-      
+
       <CardContent className="space-y-4">
         {/* Returns Grid */}
         <div className="grid grid-cols-3 gap-3">
@@ -86,14 +94,18 @@ export function FundCard({ fund, showScore = false }: FundCardProps) {
             <DollarSign className="h-4 w-4 text-muted-foreground" />
             <div>
               <div className="text-xs text-muted-foreground">Expense Ratio</div>
-              <div className="font-semibold">{fund.expenseRatio}%</div>
+              <div className="font-semibold">
+                {fund.expenseRatio ? fund.expenseRatio : 'N/A'}%
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Shield className="h-4 w-4 text-muted-foreground" />
             <div>
               <div className="text-xs text-muted-foreground">Sharpe Ratio</div>
-              <div className="font-semibold">{fund.sharpeRatio}</div>
+              <div className="font-semibold">
+                {fund.ratios.sharpeRatio ? fund.ratios.sharpeRatio.toFixed(2) : 'N/A'}
+              </div>
             </div>
           </div>
         </div>
