@@ -32,15 +32,20 @@ export const fetchEnhancedData = async (schemes: GrowwScheme[], options: FetchOp
 
   console.log('📊 Fetching enhanced data for schemes...');
   
-  const schemeCodes = schemes.map((scheme) => parseInt(scheme.scheme_code, 10));
-  const searchIds = schemes.map((scheme) => scheme.id);
+  const schemeCodes = schemes
+    .map((scheme) => parseInt(String(scheme.scheme_code), 10))
+    .filter((code) => !isNaN(code));
+    
+  const searchIds = schemes
+    .map((scheme) => scheme.id)
+    .filter(Boolean);
 
   console.log(`🔢 Processing ${schemeCodes.length} scheme codes and ${searchIds.length} search IDs`);
 
   // Fetch both types of data in parallel
   const [schemeStats, searchData] = await Promise.all([
-    fetchSchemeStats(schemeCodes, fetchOptions),
-    fetchSearchData(searchIds, fetchOptions),
+    schemeCodes.length > 0 ? fetchSchemeStats(schemeCodes, fetchOptions) : Promise.resolve({}),
+    searchIds.length > 0 ? fetchSearchData(searchIds, fetchOptions) : Promise.resolve({}),
   ]);
 
   console.log(`✅ Fetched stats for ${Object.keys(schemeStats).length} schemes`);

@@ -13,6 +13,18 @@ import { createProgressCallback } from '@/utils/progressTracker';
 import type { GrowwScheme } from '@/types/api';
 import type { MutualFund } from '@/types/mutualFund';
 
+export type SyncStep = 'fetching' | 'enhancing' | 'processing' | 'exporting' | 'saving' | 'complete' | 'error';
+
+export interface SyncProgress {
+  step: SyncStep;
+  stepLabel: string;
+  processed: number;
+  total: number;
+  errors: string[];
+}
+
+export type SyncProgressCallback = (progress: SyncProgress) => void;
+
 export interface SyncOptions {
   incremental?: boolean;
   limit?: number;
@@ -20,6 +32,7 @@ export interface SyncOptions {
   exportJson?: boolean;
   skipFirebase?: boolean;
   maxSchemesToFetch?: number;
+  onProgress?: SyncProgressCallback;
 }
 
 export interface SyncResult {
@@ -39,20 +52,31 @@ export interface SyncResult {
  */
 export const executeSync = async (options: SyncOptions = {}): Promise<SyncResult> => {
   const startTime = Date.now();
+  const errors: string[] = [];
+  const reportProgress = options.onProgress || (() => {});
+
   console.log('🚀 Starting data synchronization...');
 
   try {
     // Step 1: Fetch schemes
+    reportProgress({ step: 'fetching', stepLabel: 'Fetching schemes from Groww...', processed: 0, total: 0, errors });
     const schemes = await fetchSchemes(options);
-    
-    // Step 2: Process schemes with enhanced data
-    const processedFunds = await processSchemesWithData(schemes);
-    
+    reportProgress({ step: 'fetching', stepLabel: 'Fetching schemes from Groww...', processed: schemes.length, total: schemes.length, errors });
+
+    // Step 2: Enhance data
+    reportProgress({ step: 'enhancing', stepLabel: 'Fetching enhanced data (stats & search)...', processed: 0, total: schemes.length, errors });
+    const processedFunds = await processSchemesWithData(schemes, (processed, total) => {
+      reportProgress({ step: 'enhancing', stepLabel: 'Fetching enhanced data (stats & search)...', processed, total, errors });
+    });
+
     // Step 3: Export data if requested
     const exportedFiles = await exportData(processedFunds, options);
     
     // Step 4: Save to Firebase
-    const savedCount = await saveToFirebase(processedFunds, options);
+    reportProgress({ step: 'saving', stepLabel: 'Saving to Firebase...', processed: 0, total: processedFunds.length, errors });
+    const savedCount = await saveToFirebase(processedFunds, options, (saved, total) => {
+      reportProgress({ step: 'saving', stepLabel: 'Saving to Firebase...', processed: saved, total, errors });
+    });
 
     const endTime = Date.now();
     const duration = Math.round((endTime - startTime) / 1000);
@@ -69,10 +93,14 @@ export const executeSync = async (options: SyncOptions = {}): Promise<SyncResult
       },
     };
 
+    reportProgress({ step: 'complete', stepLabel: 'Synchronization complete!', processed: processedFunds.length, total: processedFunds.length, errors });
     logSummary(result);
     return result;
 
   } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    errors.push(errorMsg);
+    reportProgress({ step: 'error', stepLabel: `Synchronization failed: ${errorMsg}`, processed: 0, total: 0, errors });
     console.error('\n❌ Synchronization failed:', error);
     throw error;
   }
@@ -98,7 +126,10 @@ const fetchSchemes = async (options: SyncOptions): Promise<GrowwScheme[]> => {
 /**
  * Process schemes with enhanced data
  */
-const processSchemesWithData = async (schemes: GrowwScheme[]): Promise<MutualFund[]> => {
+const processSchemesWithData = async (
+  schemes: GrowwScheme[],
+  onEnhanceProgress?: (processed: number, total: number) => void,
+): Promise<MutualFund[]> => {
   console.log('\n🔄 Processing schemes with enhanced data...');
   
   // Fetch all enhanced data upfront
@@ -117,7 +148,10 @@ const processSchemesWithData = async (schemes: GrowwScheme[]): Promise<MutualFun
     {
       batchSize: 100,
       batchDelay: 100,
-      onProgress: progressCallback
+      onProgress: (processed, total) => {
+        progressCallback(processed, total);
+        onEnhanceProgress?.(processed, total);
+      },
     }
   );
 
@@ -148,7 +182,11 @@ const exportData = async (funds: MutualFund[], options: SyncOptions): Promise<st
 /**
  * Save data to Firebase
  */
-const saveToFirebase = async (funds: MutualFund[], options: SyncOptions): Promise<number> => {
+const saveToFirebase = async (
+  funds: MutualFund[],
+  options: SyncOptions,
+  onSaveProgress?: (saved: number, total: number) => void,
+): Promise<number> => {
   if (options.skipFirebase) {
     console.log('\n⏭️  Skipping Firebase save');
     return 0;
@@ -157,7 +195,10 @@ const saveToFirebase = async (funds: MutualFund[], options: SyncOptions): Promis
   console.log('\n🔥 Saving to Firebase...');
   const progressCallback = createProgressCallback('Firebase', 100);
   
-  await saveFundsInBatches(funds, 500, progressCallback);
+  await saveFundsInBatches(funds, 500, (saved, total) => {
+    progressCallback(saved, total);
+    onSaveProgress?.(saved, total);
+  });
   return funds.length;
 };
 

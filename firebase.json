@@ -1,0 +1,13 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "auth": {
+    "providers": {
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "FundGuru",
+        "supportEmail": "support@fund-guru.firebaseapp.com"
+      }
+    }
+  }
+}

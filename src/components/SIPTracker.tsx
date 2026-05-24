@@ -236,7 +236,7 @@ export function SIPTracker() {
                     </SelectTrigger>
                     <SelectContent>
                       {fundsLoading ? (
-                        <SelectItem value="" disabled>Loading funds...</SelectItem>
+                        <SelectItem value="loading" disabled>Loading funds...</SelectItem>
                       ) : (
                         allFunds.map((fund) => (
                           <SelectItem key={fund.id} value={fund.id}>

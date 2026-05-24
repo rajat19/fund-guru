@@ -39,7 +39,7 @@ export function FundCard({ fund, showScore = false }: FundCardProps) {
 
   return (
     <Card
-      className="group hover:shadow-card transition-all duration-300 border border-border hover:border-primary/30 cursor-pointer"
+      className="group glass-card animate-fade-in-up cursor-pointer"
       onClick={() => navigate(`/fund/${fund.id}`)}
     >
       <CardHeader className="pb-3">

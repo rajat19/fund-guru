@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMutualFunds, useSyncMutualFunds, MutualFundsFilters } from '@/hooks/useMutualFunds';
 import { getTopFundsByCategory, getRecommendations } from '@/utils/scoringEngine';
 import { FundCard } from './FundCard';
@@ -18,6 +19,7 @@ import { Separator } from '@/components/ui/separator';
 import { TrendingUp, Award, Target, PieChart, RefreshCw, Filter, X } from 'lucide-react';
 
 export function Dashboard() {
+  const navigate = useNavigate();
   const [riskTolerance, setRiskTolerance] = useState<'Low' | 'Moderate' | 'High'>('Moderate');
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<MutualFundsFilters>({});
@@ -99,17 +101,17 @@ export function Dashboard() {
   return (
     <div className="space-y-8">
       {/* Hero Section */}
-      <Card className="bg-gradient-to-r from-primary/10 via-primary/5 to-secondary/10 border-primary/20">
+      <Card className="glass animate-fade-in-up border-primary/20 bg-gradient-to-br from-primary/5 via-background to-secondary/5">
         <CardContent className="pt-6">
           <div className="text-center space-y-4">
-            <h1 className="text-4xl font-bold text-foreground">
-              Smart Mutual Fund Recommendations
+            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-foreground">
+              Smart Mutual Fund <span className="text-gradient">Recommendations</span>
             </h1>
-            <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+            <p className="text-lg md:text-xl text-muted-foreground max-w-3xl mx-auto font-medium">
               Discover top-performing mutual funds with real-time data from leading platforms. Make
               informed investment decisions based on comprehensive analysis.
             </p>
-            <div className="flex flex-wrap justify-center gap-4 pt-4">
+            <div className="flex flex-wrap justify-center gap-6 pt-6">
               <div className="flex items-center gap-2 text-sm">
                 <Award className="h-4 w-4 text-primary" />
                 <span>AI-Powered Rankings</span>
@@ -189,14 +191,14 @@ export function Dashboard() {
               <div className="space-y-2">
                 <label className="text-sm font-medium">Category</label>
                 <Select
-                  value={filters.category || ''}
-                  onValueChange={(value) => handleFilterChange('category', value || undefined)}
+                  value={filters.category || 'all'}
+                  onValueChange={(value) => handleFilterChange('category', value === 'all' ? undefined : value)}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="All Categories" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All Categories</SelectItem>
+                    <SelectItem value="all">All Categories</SelectItem>
                     <SelectItem value="Equity">Equity</SelectItem>
                     <SelectItem value="Debt">Debt</SelectItem>
                     <SelectItem value="Hybrid">Hybrid</SelectItem>
@@ -208,14 +210,14 @@ export function Dashboard() {
               <div className="space-y-2">
                 <label className="text-sm font-medium">Risk Level</label>
                 <Select
-                  value={filters.riskLevel || ''}
-                  onValueChange={(value) => handleFilterChange('riskLevel', value || undefined)}
+                  value={filters.riskLevel || 'all'}
+                  onValueChange={(value) => handleFilterChange('riskLevel', value === 'all' ? undefined : value)}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="All Risk Levels" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All Risk Levels</SelectItem>
+                    <SelectItem value="all">All Risk Levels</SelectItem>
                     <SelectItem value="Low">Low</SelectItem>
                     <SelectItem value="Moderate">Moderate</SelectItem>
                     <SelectItem value="High">High</SelectItem>
@@ -342,101 +344,148 @@ export function Dashboard() {
         </CardContent>
       </Card>
 
-      {/* Top Funds by Category */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Top Equity Funds */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <div className="w-3 h-3 bg-primary rounded-full"></div>
-              Top Equity Funds
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {topEquityFunds.map((fund, index) => (
-              <div key={fund.id} className="border border-border rounded-lg p-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center text-sm font-bold text-primary">
-                    {index + 1}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold text-sm truncate">{fund.schemeName}</h4>
-                    <p className="text-xs text-muted-foreground">{fund.fundHouse}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs text-profit">
-                        +{fund.returns.oneYear.toFixed(1)}%
-                      </span>
-                      <span className="text-xs text-muted-foreground">Score: {fund.score}</span>
+      {/* Conditional Rendering: Top Funds by Category OR Filtered Results */}
+      {activeFiltersCount === 0 ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Top Equity Funds */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <div className="w-3 h-3 bg-primary rounded-full"></div>
+                Top Equity Funds
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {topEquityFunds.map((fund, index) => (
+                <div 
+                  key={fund.id} 
+                  className="border border-border rounded-lg p-3 cursor-pointer hover:border-primary/50 hover:shadow-sm transition-all"
+                  onClick={() => navigate(`/fund/${fund.id}`)}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center text-sm font-bold text-primary">
+                      {index + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-semibold text-sm truncate">{fund.schemeName}</h4>
+                      <p className="text-xs text-muted-foreground">{fund.fundHouse}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs text-profit">
+                          +{fund.returns.oneYear?.toFixed(1)}%
+                        </span>
+                        <span className="text-xs text-muted-foreground">Score: {fund.score}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+              ))}
+            </CardContent>
+          </Card>
 
-        {/* Top Debt Funds */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <div className="w-3 h-3 bg-secondary rounded-full"></div>
-              Top Debt Funds
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {topDebtFunds.map((fund, index) => (
-              <div key={fund.id} className="border border-border rounded-lg p-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-secondary/10 rounded-full flex items-center justify-center text-sm font-bold text-secondary">
-                    {index + 1}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold text-sm truncate">{fund.schemeName}</h4>
-                    <p className="text-xs text-muted-foreground">{fund.fundHouse}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs text-profit">
-                        +{fund.returns.oneYear.toFixed(1)}%
-                      </span>
-                      <span className="text-xs text-muted-foreground">Score: {fund.score}</span>
+          {/* Top Debt Funds */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <div className="w-3 h-3 bg-secondary rounded-full"></div>
+                Top Debt Funds
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {topDebtFunds.map((fund, index) => (
+                <div 
+                  key={fund.id} 
+                  className="border border-border rounded-lg p-3 cursor-pointer hover:border-secondary/50 hover:shadow-sm transition-all"
+                  onClick={() => navigate(`/fund/${fund.id}`)}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-secondary/10 rounded-full flex items-center justify-center text-sm font-bold text-secondary">
+                      {index + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-semibold text-sm truncate">{fund.schemeName}</h4>
+                      <p className="text-xs text-muted-foreground">{fund.fundHouse}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs text-profit">
+                          +{fund.returns.oneYear?.toFixed(1)}%
+                        </span>
+                        <span className="text-xs text-muted-foreground">Score: {fund.score}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+              ))}
+            </CardContent>
+          </Card>
 
-        {/* Top Hybrid Funds */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <div className="w-3 h-3 bg-accent rounded-full"></div>
-              Top Hybrid Funds
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {topHybridFunds.map((fund, index) => (
-              <div key={fund.id} className="border border-border rounded-lg p-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-accent/20 rounded-full flex items-center justify-center text-sm font-bold text-accent-foreground">
-                    {index + 1}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold text-sm truncate">{fund.schemeName}</h4>
-                    <p className="text-xs text-muted-foreground">{fund.fundHouse}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs text-profit">
-                        +{fund.returns.oneYear.toFixed(1)}%
-                      </span>
-                      <span className="text-xs text-muted-foreground">Score: {fund.score}</span>
+          {/* Top Hybrid Funds */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <div className="w-3 h-3 bg-accent rounded-full"></div>
+                Top Hybrid Funds
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {topHybridFunds.map((fund, index) => (
+                <div 
+                  key={fund.id} 
+                  className="border border-border rounded-lg p-3 cursor-pointer hover:border-accent/50 hover:shadow-sm transition-all"
+                  onClick={() => navigate(`/fund/${fund.id}`)}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-accent/20 rounded-full flex items-center justify-center text-sm font-bold text-accent-foreground">
+                      {index + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-semibold text-sm truncate">{fund.schemeName}</h4>
+                      <p className="text-xs text-muted-foreground">{fund.fundHouse}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs text-profit">
+                          +{fund.returns.oneYear?.toFixed(1)}%
+                        </span>
+                        <span className="text-xs text-muted-foreground">Score: {fund.score}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
+        <Card className="glass-card border-primary/20 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
+          <CardHeader>
+            <CardTitle>Filtered Results ({allFunds.length} funds)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {allFunds.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {allFunds.slice(0, 12).map((fund) => (
+                  <div key={fund.id} className="relative">
+                    <FundCard fund={fund} showScore={true} />
+                  </div>
+                ))}
               </div>
-            ))}
+            ) : (
+              <div className="text-center py-12 text-muted-foreground bg-muted/20 rounded-lg">
+                No mutual funds match your current filters. Try adjusting your criteria.
+              </div>
+            )}
+            
+            {allFunds.length > 12 && (
+              <div className="mt-8 text-center">
+                <Button 
+                  variant="outline" 
+                  onClick={() => navigate('/explorer')}
+                  className="border-primary/30 hover:bg-primary/5"
+                >
+                  View All in Fund Explorer
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
-      </div>
+      )}
 
       {/* Market Insights */}
       <Card>

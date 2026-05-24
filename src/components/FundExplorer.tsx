@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useMutualFunds, MutualFundsFilters } from '@/hooks/useMutualFunds';
 import { FundCard } from './FundCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { MutualFund } from '@/types/mutualFund';
 
-type SortField = 'returns' | 'expenseRatio' | 'sharpeRatio' | 'aum' | 'fundName';
+type SortField = 'returns' | 'returns3Y' | 'returns5Y' | 'expenseRatio' | 'sharpeRatio' | 'alpha' | 'sortinoRatio' | 'aum' | 'fundName';
 type SortDirection = 'asc' | 'desc';
 
 export function FundExplorer() {
@@ -48,6 +48,9 @@ export function FundExplorer() {
 
   const { data: allFunds = [], isLoading, error } = useMutualFunds(filters);
 
+  const fundHouses = useMemo(() => Array.from(new Set(allFunds.map(f => f.fundHouse))).filter(Boolean).sort(), [allFunds]);
+  const subCategories = useMemo(() => Array.from(new Set(allFunds.map(f => f.subCategory))).filter(Boolean).sort(), [allFunds]);
+
   // Sort funds based on selected criteria and limit to top 20
   const sortedFunds = [...allFunds]
     .sort((a, b) => {
@@ -56,16 +59,32 @@ export function FundExplorer() {
 
       switch (sortField) {
         case 'returns':
-          aValue = a.returns.oneYear || 0;
-          bValue = b.returns.oneYear || 0;
+          aValue = a.returns?.oneYear || -999;
+          bValue = b.returns?.oneYear || -999;
+          break;
+        case 'returns3Y':
+          aValue = a.returns?.threeYear || -999;
+          bValue = b.returns?.threeYear || -999;
+          break;
+        case 'returns5Y':
+          aValue = a.returns?.fiveYear || -999;
+          bValue = b.returns?.fiveYear || -999;
           break;
         case 'expenseRatio':
-          aValue = a.expenseRatio || 0;
-          bValue = b.expenseRatio || 0;
+          aValue = a.expenseRatio || 999;
+          bValue = b.expenseRatio || 999;
           break;
         case 'sharpeRatio':
-          aValue = a.ratios.sharpeRatio || 0;
-          bValue = b.ratios.sharpeRatio || 0;
+          aValue = a.ratios?.sharpeRatio || -999;
+          bValue = b.ratios?.sharpeRatio || -999;
+          break;
+        case 'alpha':
+          aValue = a.ratios?.alpha || -999;
+          bValue = b.ratios?.alpha || -999;
+          break;
+        case 'sortinoRatio':
+          aValue = a.ratios?.sortinoRatio || -999;
+          bValue = b.ratios?.sortinoRatio || -999;
           break;
         case 'aum':
           aValue = a.aum || 0;
@@ -222,26 +241,29 @@ export function FundExplorer() {
           <div className="flex flex-wrap gap-2">
             <span className="text-sm text-muted-foreground self-center">Sort by:</span>
             <SortButton field="returns">1Y Return</SortButton>
+            <SortButton field="returns3Y">3Y Return</SortButton>
+            <SortButton field="returns5Y">5Y Return</SortButton>
             <SortButton field="expenseRatio">Expense Ratio</SortButton>
-            <SortButton field="sharpeRatio">Sharpe Ratio</SortButton>
+            <SortButton field="sharpeRatio">Sharpe</SortButton>
+            <SortButton field="alpha">Alpha</SortButton>
             <SortButton field="aum">AUM</SortButton>
             <SortButton field="fundName">Name</SortButton>
           </div>
 
           {showFilters && (
             <div className="space-y-4 p-4 bg-muted/30 rounded-lg">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Category</label>
                   <Select
-                    value={filters.category || ''}
-                    onValueChange={(value) => handleFilterChange('category', value || undefined)}
+                    value={filters.category || 'all'}
+                    onValueChange={(value) => handleFilterChange('category', value === 'all' ? undefined : value)}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="All Categories" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">All Categories</SelectItem>
+                      <SelectItem value="all">All Categories</SelectItem>
                       <SelectItem value="Equity">Equity</SelectItem>
                       <SelectItem value="Debt">Debt</SelectItem>
                       <SelectItem value="Hybrid">Hybrid</SelectItem>
@@ -250,52 +272,94 @@ export function FundExplorer() {
                 </div>
 
                 <div className="space-y-2">
+                  <label className="text-sm font-medium">Sub Category</label>
+                  <Select
+                    value={filters.subCategory || 'all'}
+                    onValueChange={(value) => handleFilterChange('subCategory', value === 'all' ? undefined : value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="All Sub Categories" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Sub Categories</SelectItem>
+                      {subCategories.map(sc => (
+                        <SelectItem key={sc} value={sc}>{sc}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Fund House</label>
+                  <Select
+                    value={filters.fundHouse || 'all'}
+                    onValueChange={(value) => handleFilterChange('fundHouse', value === 'all' ? undefined : value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="All Fund Houses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Fund Houses</SelectItem>
+                      {fundHouses.map(fh => (
+                        <SelectItem key={fh} value={fh}>{fh}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
                   <label className="text-sm font-medium">Risk Level</label>
                   <Select
-                    value={filters.riskLevel || ''}
-                    onValueChange={(value) => handleFilterChange('riskLevel', value || undefined)}
+                    value={filters.riskLevel || 'all'}
+                    onValueChange={(value) => handleFilterChange('riskLevel', value === 'all' ? undefined : value)}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="All Risk Levels" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">All Risk Levels</SelectItem>
+                      <SelectItem value="all">All Risk Levels</SelectItem>
                       <SelectItem value="Low">Low Risk</SelectItem>
                       <SelectItem value="Moderate">Moderate Risk</SelectItem>
+                      <SelectItem value="Moderately High">Moderately High Risk</SelectItem>
                       <SelectItem value="High">High Risk</SelectItem>
+                      <SelectItem value="Very High">Very High Risk</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Min 1Y Return (%)</label>
-                  <Input
-                    type="number"
-                    placeholder="0"
-                    value={filters.minReturn || ''}
-                    onChange={(e) =>
-                      handleFilterChange(
-                        'minReturn',
-                        e.target.value ? Number(e.target.value) : undefined,
-                      )
-                    }
-                  />
+                  <Input type="number" placeholder="0" value={filters.minReturn || ''} onChange={(e) => handleFilterChange('minReturn', e.target.value ? Number(e.target.value) : undefined)} />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Min 3Y Return (%)</label>
+                  <Input type="number" placeholder="0" value={filters.minReturn3Y || ''} onChange={(e) => handleFilterChange('minReturn3Y', e.target.value ? Number(e.target.value) : undefined)} />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Min 5Y Return (%)</label>
+                  <Input type="number" placeholder="0" value={filters.minReturn5Y || ''} onChange={(e) => handleFilterChange('minReturn5Y', e.target.value ? Number(e.target.value) : undefined)} />
                 </div>
 
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Max Expense Ratio (%)</label>
-                  <Input
-                    type="number"
-                    step="0.1"
-                    placeholder="2.0"
-                    value={filters.maxExpenseRatio || ''}
-                    onChange={(e) =>
-                      handleFilterChange(
-                        'maxExpenseRatio',
-                        e.target.value ? Number(e.target.value) : undefined,
-                      )
-                    }
-                  />
+                  <Input type="number" step="0.1" placeholder="2.0" value={filters.maxExpenseRatio || ''} onChange={(e) => handleFilterChange('maxExpenseRatio', e.target.value ? Number(e.target.value) : undefined)} />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Min Sharpe Ratio</label>
+                  <Input type="number" step="0.1" placeholder="1.0" value={filters.minSharpeRatio || ''} onChange={(e) => handleFilterChange('minSharpeRatio', e.target.value ? Number(e.target.value) : undefined)} />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Min Alpha</label>
+                  <Input type="number" step="0.1" placeholder="0" value={filters.minAlpha || ''} onChange={(e) => handleFilterChange('minAlpha', e.target.value ? Number(e.target.value) : undefined)} />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Min AUM (Cr)</label>
+                  <Input type="number" placeholder="500" value={filters.minAUM || ''} onChange={(e) => handleFilterChange('minAUM', e.target.value ? Number(e.target.value) : undefined)} />
                 </div>
               </div>
 
@@ -327,8 +391,12 @@ export function FundExplorer() {
                 {allFunds.length > displayLimit && (
                   <p className="text-xs text-muted-foreground">
                     Sorted by {sortField === 'returns' ? '1Y Returns' : 
+                              sortField === 'returns3Y' ? '3Y Returns' :
+                              sortField === 'returns5Y' ? '5Y Returns' :
                               sortField === 'expenseRatio' ? 'Expense Ratio' :
                               sortField === 'sharpeRatio' ? 'Sharpe Ratio' :
+                              sortField === 'alpha' ? 'Alpha' :
+                              sortField === 'sortinoRatio' ? 'Sortino Ratio' :
                               sortField === 'aum' ? 'AUM' : 'Fund Name'} 
                     ({sortDirection === 'desc' ? 'High to Low' : 'Low to High'})
                   </p>

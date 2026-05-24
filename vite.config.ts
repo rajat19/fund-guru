@@ -7,6 +7,14 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: '::',
     port: 8080,
+    proxy: {
+      '/api/groww': {
+        target: 'https://groww.in/v1/api',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/groww/, ''),
+        secure: true,
+      },
+    },
   },
   plugins: [react()].filter(Boolean),
   resolve: {
@@ -15,3 +23,4 @@ export default defineConfig(({ mode }) => ({
     },
   },
 }));
+

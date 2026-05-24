@@ -27,6 +27,30 @@ export interface FirebaseMetadata {
 }
 
 /**
+ * Ensures a fund document from Firebase has all required objects initialized
+ * to prevent undefined property access crashes.
+ */
+const sanitizeFundData = (data: DocumentData): MutualFund => {
+  // Convert Timestamp back to Date
+  if (data.lastUpdated && typeof data.lastUpdated === 'object' && 'toDate' in data.lastUpdated) {
+    data.lastUpdated = (data.lastUpdated as unknown as Timestamp).toDate();
+  }
+  
+  // Ensure objects exist to prevent undefined property access
+  if (!data.returns) data.returns = {};
+  if (!data.ratios) data.ratios = {};
+  if (!data.riskMetrics) data.riskMetrics = {};
+  if (!data.portfolioMetrics) data.portfolioMetrics = {};
+  if (!data.rankings) data.rankings = {};
+  if (!data.categoryReturns) data.categoryReturns = {};
+  if (!data.indexReturns) data.indexReturns = {};
+  if (!data.sectors) data.sectors = {};
+  if (!data.ratings) data.ratings = {};
+  
+  return data as MutualFund;
+};
+
+/**
  * Save multiple funds in batches
  */
 export const saveFundsInBatches = async (
@@ -48,7 +72,7 @@ export const saveFundsInBatches = async (
         const docRef = doc(db, FUNDS_COLLECTION, fund.id);
         const fundData = {
           ...fund,
-          lastUpdated: Timestamp.fromDate(fund.lastUpdated),
+          lastUpdated: Timestamp.fromDate(fund.lastUpdated || new Date()),
         };
         batch.set(docRef, fundData);
       });
@@ -95,18 +119,7 @@ export const getAllFunds = async (): Promise<MutualFund[]> => {
 
     const funds: MutualFund[] = [];
     querySnapshot.forEach((doc: QueryDocumentSnapshot<DocumentData>) => {
-      const data = doc.data() as MutualFund;
-
-      // Convert Timestamp back to Date
-      if (
-        data.lastUpdated &&
-        typeof data.lastUpdated === 'object' &&
-        'toDate' in data.lastUpdated
-      ) {
-        data.lastUpdated = (data.lastUpdated as unknown as Timestamp).toDate();
-      }
-
-      funds.push(data);
+      funds.push(sanitizeFundData(doc.data()));
     });
 
     console.log(`✅ Retrieved ${funds.length} funds from Firebase`);
@@ -132,18 +145,7 @@ export const getFundsByCategory = async (category: string, limitCount: number = 
     const funds: MutualFund[] = [];
 
     querySnapshot.forEach((doc) => {
-      const data = doc.data() as MutualFund;
-
-      // Convert Timestamp back to Date
-      if (
-        data.lastUpdated &&
-        typeof data.lastUpdated === 'object' &&
-        'toDate' in data.lastUpdated
-      ) {
-        data.lastUpdated = (data.lastUpdated as unknown as Timestamp).toDate();
-      }
-
-      funds.push(data);
+      funds.push(sanitizeFundData(doc.data()));
     });
 
     return funds;
@@ -162,18 +164,7 @@ export const getFundById = async (id: string): Promise<MutualFund | null> => {
     const docSnap = await getDoc(docRef);
 
     if (docSnap.exists()) {
-      const data = docSnap.data() as MutualFund;
-
-      // Convert Timestamp back to Date
-      if (
-        data.lastUpdated &&
-        typeof data.lastUpdated === 'object' &&
-        'toDate' in data.lastUpdated
-      ) {
-        data.lastUpdated = (data.lastUpdated as unknown as Timestamp).toDate();
-      }
-
-      return data;
+      return sanitizeFundData(docSnap.data());
     }
 
     return null;
@@ -201,20 +192,11 @@ export const searchFunds = async (searchTerm: string, limitCount: number = 50): 
 
       // Simple text matching
       if (
-        data.schemeName.toLowerCase().includes(searchLower) ||
-        data.fundName.toLowerCase().includes(searchLower) ||
-        data.fundHouse.toLowerCase().includes(searchLower)
+        data.schemeName?.toLowerCase().includes(searchLower) ||
+        data.fundName?.toLowerCase().includes(searchLower) ||
+        data.fundHouse?.toLowerCase().includes(searchLower)
       ) {
-        // Convert Timestamp back to Date
-        if (
-          data.lastUpdated &&
-          typeof data.lastUpdated === 'object' &&
-          'toDate' in data.lastUpdated
-        ) {
-          data.lastUpdated = (data.lastUpdated as unknown as Timestamp).toDate();
-        }
-
-        funds.push(data);
+        funds.push(sanitizeFundData(doc.data()));
       }
     });
 
@@ -237,18 +219,7 @@ export const getTopPerformingFunds = async (limitCount: number = 10): Promise<Mu
     const funds: MutualFund[] = [];
 
     querySnapshot.forEach((doc) => {
-      const data = doc.data() as MutualFund;
-
-      // Convert Timestamp back to Date
-      if (
-        data.lastUpdated &&
-        typeof data.lastUpdated === 'object' &&
-        'toDate' in data.lastUpdated
-      ) {
-        data.lastUpdated = (data.lastUpdated as unknown as Timestamp).toDate();
-      }
-
-      funds.push(data);
+      funds.push(sanitizeFundData(doc.data()));
     });
 
     // Sort by 1-year returns (descending)

@@ -8,30 +8,33 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    --background: 248 50% 98%;
-    --foreground: 220 25% 15%;
+    --background: 240 20% 99%;
+    --foreground: 240 10% 10%;
 
     --card: 0 0% 100%;
-    --card-foreground: 220 25% 15%;
+    --card-foreground: 240 10% 15%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 220 25% 15%;
+    --popover-foreground: 240 10% 15%;
 
-    --primary: 210 85% 45%;
+    /* Vibrant Indigo Primary */
+    --primary: 250 84% 54%;
     --primary-foreground: 0 0% 100%;
-    --primary-glow: 210 100% 65%;
+    --primary-glow: 250 90% 70%;
 
-    --secondary: 160 60% 45%;
+    /* Cyan Secondary */
+    --secondary: 190 90% 45%;
     --secondary-foreground: 0 0% 100%;
-    --secondary-glow: 160 80% 65%;
+    --secondary-glow: 190 100% 65%;
 
-    --muted: 220 20% 95%;
-    --muted-foreground: 220 15% 50%;
+    --muted: 240 10% 96%;
+    --muted-foreground: 240 5% 45%;
 
-    --accent: 45 90% 55%;
-    --accent-foreground: 220 25% 15%;
+    /* Pink/Rose Accent */
+    --accent: 330 85% 60%;
+    --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 75% 55%;
+    --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
     --success: 160 70% 45%;
@@ -65,44 +68,39 @@ All colors MUST be HSL.
 
     --radius: 0.5rem;
 
-    --sidebar-background: 0 0% 98%;
-
-    --sidebar-foreground: 240 5.3% 26.1%;
-
-    --sidebar-primary: 240 5.9% 10%;
-
-    --sidebar-primary-foreground: 0 0% 98%;
-
-    --sidebar-accent: 240 4.8% 95.9%;
-
-    --sidebar-accent-foreground: 240 5.9% 10%;
-
-    --sidebar-border: 220 13% 91%;
+    /* Sidebar Modern Floating Theme (Light) */
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 240 10% 15%;
+    --sidebar-primary: 250 84% 54%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 5% 96%;
+    --sidebar-accent-foreground: 240 10% 15%;
+    --sidebar-border: 240 10% 90%;
 
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
+    --background: 240 10% 4%;
+    --foreground: 240 10% 98%;
 
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
+    --card: 240 10% 6%;
+    --card-foreground: 240 10% 98%;
 
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 240 10% 6%;
+    --popover-foreground: 240 10% 98%;
 
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --primary: 250 84% 65%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 190 90% 50%;
+    --secondary-foreground: 0 0% 10%;
 
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --muted: 240 10% 12%;
+    --muted-foreground: 240 5% 65%;
 
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 330 85% 65%;
+    --accent-foreground: 0 0% 100%;
 
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
@@ -110,13 +108,14 @@ All colors MUST be HSL.
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
     --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
+    /* Dark Mode Sidebar */
+    --sidebar-background: 250 30% 8%;
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-primary: 250 84% 65%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-accent: 250 30% 14%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 250 30% 14%;
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
 }
@@ -127,6 +126,18 @@ All colors MUST be HSL.
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-background/60 backdrop-blur-xl border border-white/10 shadow-elegant;
+  }
+  .glass-card {
+    @apply bg-card/60 backdrop-blur-lg border border-border shadow-card hover:shadow-glow hover:-translate-y-1 transition-all duration-300;
+  }
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary via-secondary to-accent;
   }
 }
