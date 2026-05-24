@@ -8,47 +8,47 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    --background: 240 20% 99%;
-    --foreground: 240 10% 10%;
+    --background: 210 20% 98%;
+    --foreground: 220 15% 15%;
 
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 15%;
+    --card-foreground: 220 15% 15%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 15%;
+    --popover-foreground: 220 15% 15%;
 
-    /* Vibrant Indigo Primary */
-    --primary: 250 84% 54%;
+    /* Emerald Green Primary */
+    --primary: 155 75% 39%;
     --primary-foreground: 0 0% 100%;
-    --primary-glow: 250 90% 70%;
+    --primary-glow: 155 80% 50%;
 
-    /* Cyan Secondary */
-    --secondary: 190 90% 45%;
+    /* Slate Secondary */
+    --secondary: 220 20% 25%;
     --secondary-foreground: 0 0% 100%;
-    --secondary-glow: 190 100% 65%;
+    --secondary-glow: 220 15% 45%;
 
-    --muted: 240 10% 96%;
-    --muted-foreground: 240 5% 45%;
+    --muted: 220 15% 95%;
+    --muted-foreground: 220 10% 45%;
 
-    /* Pink/Rose Accent */
-    --accent: 330 85% 60%;
+    /* Teal Accent */
+    --accent: 180 60% 45%;
     --accent-foreground: 0 0% 100%;
 
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
-    --success: 160 70% 45%;
+    --success: 155 75% 39%;
     --success-foreground: 0 0% 100%;
 
     --warning: 35 85% 55%;
     --warning-foreground: 220 25% 15%;
 
-    --border: 220 25% 90%;
-    --input: 220 25% 92%;
-    --ring: 210 85% 45%;
+    --border: 220 20% 90%;
+    --input: 220 20% 92%;
+    --ring: 155 75% 39%;
 
     /* Financial specific colors */
-    --profit: 160 70% 45%;
+    --profit: 155 75% 39%;
     --loss: 0 75% 55%;
     --neutral: 220 15% 50%;
 
@@ -70,53 +70,55 @@ All colors MUST be HSL.
 
     /* Sidebar Modern Floating Theme (Light) */
     --sidebar-background: 0 0% 100%;
-    --sidebar-foreground: 240 10% 15%;
-    --sidebar-primary: 250 84% 54%;
+    --sidebar-foreground: 220 15% 15%;
+    --sidebar-primary: 155 75% 39%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 5% 96%;
-    --sidebar-accent-foreground: 240 10% 15%;
-    --sidebar-border: 240 10% 90%;
-
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-accent: 220 15% 96%;
+    --sidebar-accent-foreground: 220 15% 15%;
+    --sidebar-border: 220 20% 90%;
+    --sidebar-ring: 155 75% 39%;
   }
 
   .dark {
-    --background: 240 10% 4%;
-    --foreground: 240 10% 98%;
+    --background: 220 20% 8%;
+    --foreground: 0 0% 98%;
 
-    --card: 240 10% 6%;
-    --card-foreground: 240 10% 98%;
+    --card: 220 20% 12%;
+    --card-foreground: 0 0% 98%;
 
-    --popover: 240 10% 6%;
-    --popover-foreground: 240 10% 98%;
+    --popover: 220 20% 12%;
+    --popover-foreground: 0 0% 98%;
 
-    --primary: 250 84% 65%;
+    --primary: 155 70% 45%;
     --primary-foreground: 0 0% 100%;
+    --primary-glow: 155 80% 55%;
 
-    --secondary: 190 90% 50%;
-    --secondary-foreground: 0 0% 10%;
+    --secondary: 220 15% 30%;
+    --secondary-foreground: 0 0% 100%;
+    --secondary-glow: 220 15% 40%;
 
-    --muted: 240 10% 12%;
-    --muted-foreground: 240 5% 65%;
+    --muted: 220 20% 16%;
+    --muted-foreground: 220 10% 65%;
 
-    --accent: 330 85% 65%;
+    --accent: 180 60% 50%;
     --accent-foreground: 0 0% 100%;
 
     --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive-foreground: 0 0% 98%;
 
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    --border: 220 20% 18%;
+    --input: 220 20% 18%;
+    --ring: 155 70% 45%;
+
     /* Dark Mode Sidebar */
-    --sidebar-background: 250 30% 8%;
+    --sidebar-background: 220 20% 10%;
     --sidebar-foreground: 0 0% 98%;
-    --sidebar-primary: 250 84% 65%;
+    --sidebar-primary: 155 70% 45%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 250 30% 14%;
+    --sidebar-accent: 220 20% 16%;
     --sidebar-accent-foreground: 0 0% 98%;
-    --sidebar-border: 250 30% 14%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-border: 220 20% 16%;
+    --sidebar-ring: 155 70% 45%;
   }
 }
 

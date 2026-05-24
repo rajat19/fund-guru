@@ -17,6 +17,7 @@ import Goals from './pages/Goals';
 import Reports from './pages/Reports';
 import Admin from './pages/Admin';
 import NotFound from './pages/NotFound';
+import { ProtectedRoute } from '@/components/ProtectedRoute';
 
 const queryClient = new QueryClient();
 
@@ -33,11 +34,13 @@ const App = () => (
               <Route path="/" element={<Dashboard />} />
               <Route path="/explorer" element={<FundExplorer />} />
               <Route path="/fund/:id" element={<FundDetail />} />
-              <Route path="/profile" element={<Profile />} />
-              <Route path="/sip" element={<SIPTracker />} />
-              <Route path="/portfolio" element={<Portfolio />} />
-              <Route path="/goals" element={<Goals />} />
-              <Route path="/reports" element={<Reports />} />
+              <Route element={<ProtectedRoute />}>
+                <Route path="/profile" element={<Profile />} />
+                <Route path="/sip" element={<SIPTracker />} />
+                <Route path="/portfolio" element={<Portfolio />} />
+                <Route path="/goals" element={<Goals />} />
+                <Route path="/reports" element={<Reports />} />
+              </Route>
               <Route path="/admin" element={<Admin />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
