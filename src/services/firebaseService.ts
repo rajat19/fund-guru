@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { MutualFund } from '@/types/mutualFund';
+import { getLocalCache, setLocalCache } from '@/utils/cache';
 
 const FUNDS_COLLECTION = 'mutual_funds';
 const METADATA_COLLECTION = 'metadata';
@@ -57,13 +58,51 @@ export const saveFundsInBatches = async (
   funds: MutualFund[],
   batchSize: number = 500,
   onProgress?: (saved: number, total: number) => void,
+  signal?: AbortSignal,
+  isFullSync: boolean = false
 ): Promise<void> => {
   console.log(`🔄 Saving ${funds.length} funds to Firebase in batches of ${batchSize}...`);
+
+  if (isFullSync) {
+    console.log(`🧹 Full sync detected. Checking for stale funds to delete...`);
+    try {
+      const existingSnapshot = await getDocs(collection(db, FUNDS_COLLECTION));
+      const existingIds = new Set(existingSnapshot.docs.map(d => d.id));
+      
+      // Remove all IDs that are present in the new payload
+      funds.forEach(f => existingIds.delete(f.id));
+      
+      if (existingIds.size > 0) {
+        console.log(`🗑️ Found ${existingIds.size} stale/replaced funds in Firebase. Deleting...`);
+        const staleIds = Array.from(existingIds);
+        for (let i = 0; i < staleIds.length; i += batchSize) {
+          if (signal?.aborted) throw new Error('Sync cancelled by user');
+          const batch = writeBatch(db);
+          const currentBatchIds = staleIds.slice(i, i + batchSize);
+          currentBatchIds.forEach(id => {
+            batch.delete(doc(db, FUNDS_COLLECTION, id));
+            console.log(`   - Deleted: ${id}`);
+          });
+          await batch.commit();
+        }
+      } else {
+        console.log(`✨ No stale funds found in Firebase.`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Sync cancelled by user') throw error;
+      console.error(`❌ Failed to delete stale funds:`, error);
+    }
+  }
 
   let saved = 0;
   const errors: string[] = [];
 
   for (let i = 0; i < funds.length; i += batchSize) {
+    if (signal?.aborted) {
+      console.log('⚠️ Saving to Firebase cancelled by user.');
+      throw new Error('Sync cancelled by user');
+    }
+
     const batch = writeBatch(db);
     const currentBatch = funds.slice(i, i + batchSize);
 
@@ -72,7 +111,7 @@ export const saveFundsInBatches = async (
         const docRef = doc(db, FUNDS_COLLECTION, fund.id);
         const fundData = {
           ...fund,
-          lastUpdated: Timestamp.fromDate(fund.lastUpdated || new Date()),
+          lastUpdated: Timestamp.fromDate(fund.lastUpdated ? new Date(fund.lastUpdated) : new Date()),
         };
         batch.set(docRef, fundData);
       });
@@ -113,6 +152,39 @@ export const saveFundsInBatches = async (
  * Get all funds
  */
 export const getAllFunds = async (): Promise<MutualFund[]> => {
+  // 1. Try Browser IndexedDB Cache FIRST (always the most up-to-date in browser)
+  try {
+    const cachedFunds = await getLocalCache<any[]>('all_mutual_funds');
+    if (cachedFunds && cachedFunds.length > 0) {
+      const funds = cachedFunds.map(sanitizeFundData);
+      console.log(`✅ Retrieved ${funds.length} funds from browser IndexedDB cache`);
+      return funds;
+    }
+  } catch (error) {
+    console.log('⚠️ IndexedDB cache not available...');
+  }
+
+  // 2. Try local JSON dev cache SECOND (fallback for local development if IndexedDB is empty)
+  try {
+    if (typeof window !== 'undefined') {
+      const response = await fetch('/data/funds-cache.json');
+      if (response.ok) {
+        const text = await response.text();
+        if (text.trim().startsWith('[')) {
+          const data = JSON.parse(text);
+          const funds = data.map(sanitizeFundData);
+          console.log(`✅ Retrieved ${funds.length} funds from local JSON dev cache`);
+          // Populate IndexedDB for next time
+          await setLocalCache('all_mutual_funds', funds).catch(console.error);
+          return funds;
+        }
+      }
+    }
+  } catch (error) {
+    // Ignore and fallback
+  }
+
+  // 3. Fallback to Firebase & Save to Cache
   try {
     console.log('🔍 Fetching all funds from Firebase...');
     const querySnapshot = await getDocs(collection(db, FUNDS_COLLECTION));
@@ -123,6 +195,12 @@ export const getAllFunds = async (): Promise<MutualFund[]> => {
     });
 
     console.log(`✅ Retrieved ${funds.length} funds from Firebase`);
+    
+    // Save to IndexedDB for next time
+    if (funds.length > 0) {
+      await setLocalCache('all_mutual_funds', funds).catch(console.error);
+    }
+    
     return funds;
   } catch (error) {
     console.error('❌ Error fetching funds from Firebase:', error);

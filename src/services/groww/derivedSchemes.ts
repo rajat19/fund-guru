@@ -23,7 +23,11 @@ export const getDerivedScheme = async (page: number = 0): Promise<GrowwSchemeRes
   return response.json();
 };
 
-export const getAllDerivedSchemes = async (maxSchemesToFetch?: number): Promise<GrowwScheme[]> => {
+export const getAllDerivedSchemes = async (
+  maxSchemesToFetch?: number,
+  onProgress?: (msg: string) => void,
+  signal?: AbortSignal
+): Promise<GrowwScheme[]> => {
   console.log('🚀 Starting to fetch all mutual fund derived schemes...');
 
   const initialResponse = await getDerivedScheme(0);
@@ -40,8 +44,16 @@ export const getAllDerivedSchemes = async (maxSchemesToFetch?: number): Promise<
   const totalPages = Math.ceil(totalSchemes / perPage);
 
   for (let page = 1; page < totalPages; page++) {
+    if (signal?.aborted) {
+      console.log('⚠️ Fetching derived schemes cancelled by user.');
+      throw new Error('Sync cancelled by user');
+    }
+
     try {
-      console.log(`📄 Fetching derived page ${page + 1}/${totalPages}...`);
+      const msg = `Fetching derived page ${page + 1}/${totalPages}`;
+      console.log(`📄 ${msg}...`);
+      if (onProgress) onProgress(msg);
+      
       const schemes = await getDerivedScheme(page);
       if (schemes.content) {
         allFunds.push(...schemes.content);
@@ -50,6 +62,7 @@ export const getAllDerivedSchemes = async (maxSchemesToFetch?: number): Promise<
       // Add delay to avoid rate limiting
       await delay(1000);
     } catch (error) {
+      if (error instanceof Error && error.message === 'Sync cancelled by user') throw error;
       console.error(`❌ Error fetching derived page ${page}:`, error);
       // Continue with next page instead of failing completely
     }

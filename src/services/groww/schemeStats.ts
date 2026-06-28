@@ -25,6 +25,8 @@ export const batchProcessSchemeStats = async (
   schemeCodes: (number | string)[],
   batchSize: number = 10,
   delayMs: number = 500,
+  onProgress?: (msg: string) => void,
+  signal?: AbortSignal
 ): Promise<Record<string, GrowwSchemeStatsResponse>> => {
   if (schemeCodes.length === 0) {
     return {};
@@ -33,12 +35,20 @@ export const batchProcessSchemeStats = async (
   console.log(`🔄 Processing ${schemeCodes.length} scheme stats in batches of ${batchSize}...`);
 
   const results: Record<string, GrowwSchemeStatsResponse> = {};
+  const totalBatches = Math.ceil(schemeCodes.length / batchSize);
 
   for (let i = 0; i < schemeCodes.length; i += batchSize) {
+    if (signal?.aborted) {
+      console.log('⚠️ Batch processing scheme stats cancelled by user.');
+      throw new Error('Sync cancelled by user');
+    }
+
+    const currentBatchNum = Math.floor(i / batchSize) + 1;
+    const msg = `Fetching stats batch ${currentBatchNum}/${totalBatches}`;
+    console.log(`📊 ${msg}...`);
+    if (onProgress) onProgress(msg);
+
     const batch = schemeCodes.slice(i, i + batchSize);
-    console.log(
-      `📊 Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(schemeCodes.length / batchSize)}...`,
-    );
 
     const batchPromises = batch.map(async (schemeCode) => {
       try {

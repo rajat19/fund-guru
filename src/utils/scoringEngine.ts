@@ -1,7 +1,8 @@
 import { MutualFund } from '@/types/mutualFund';
 
-interface ScoringWeights {
+export interface ScoringWeights {
   returns: {
+    sixMonth: number;
     oneYear: number;
     threeYear: number;
     fiveYear: number;
@@ -14,13 +15,14 @@ interface ScoringWeights {
   riskAdjustment: number;
 }
 
-const defaultWeights: ScoringWeights = {
+export const defaultWeights: ScoringWeights = {
   returns: {
-    oneYear: 0.15,
-    threeYear: 0.25,
+    sixMonth: 0.25,
+    oneYear: 0.25,
+    threeYear: 0.15,
     fiveYear: 0.2,
   },
-  expenseRatio: 0.15,
+  expenseRatio: 0.20,
   sharpeRatio: 0.1,
   sortinoRatio: 0.05,
   alpha: 0.05,
@@ -35,6 +37,7 @@ export function calculateFundScore(
   let score = 0;
 
   // Returns scoring (higher is better)
+  score += (fund.returns.sixMonth || 0) * weights.returns.sixMonth;
   score += (fund.returns.oneYear || 0) * weights.returns.oneYear;
   score += (fund.returns.threeYear || 0) * weights.returns.threeYear;
   score += (fund.returns.fiveYear || 0) * weights.returns.fiveYear;
@@ -51,9 +54,9 @@ export function calculateFundScore(
 
   // Risk level adjustment
   const riskMultiplier =
-    fund.riskMetrics.riskLevel === 'Low'
+    fund.riskMetrics.risk === 'Low'
       ? 1.1
-      : fund.riskMetrics.riskLevel === 'Moderate'
+      : fund.riskMetrics.risk === 'Moderate'
         ? 1.0
         : 0.9;
   score *= 1 + weights.riskAdjustment * (riskMultiplier - 1);
@@ -97,13 +100,13 @@ export function getRecommendations(
     case 'Low':
       filteredFunds = funds.filter(
         (fund) =>
-          fund.riskMetrics.riskLevel === 'Low' ||
-          (fund.category === 'Hybrid' && fund.riskMetrics.riskLevel === 'Moderate'),
+          fund.riskMetrics.risk === 'Low' ||
+          (fund.category === 'Hybrid' && fund.riskMetrics.risk === 'Moderate'),
       );
       break;
     case 'Moderate':
       filteredFunds = funds.filter(
-        (fund) => fund.riskMetrics.riskLevel === 'Low' || fund.riskMetrics.riskLevel === 'Moderate',
+        (fund) => fund.riskMetrics.risk === 'Low' || fund.riskMetrics.risk === 'Moderate',
       );
       break;
     case 'High':

@@ -1,5 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useMutualFunds, MutualFundsFilters } from '@/hooks/useMutualFunds';
+import { useScoringConfig } from '@/hooks/useScoringConfig';
+import { calculateFundScore } from '@/utils/scoringEngine';
 import { FundCard } from './FundCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -34,7 +36,7 @@ import {
 } from 'lucide-react';
 import { MutualFund } from '@/types/mutualFund';
 
-type SortField = 'returns' | 'returns3Y' | 'returns5Y' | 'expenseRatio' | 'sharpeRatio' | 'alpha' | 'sortinoRatio' | 'aum' | 'fundName';
+type SortField = 'aiScore' | 'returns' | 'returns3Y' | 'returns5Y' | 'expenseRatio' | 'sharpeRatio' | 'alpha' | 'sortinoRatio' | 'aum' | 'fundName';
 type SortDirection = 'asc' | 'desc';
 
 export function FundExplorer() {
@@ -47,6 +49,7 @@ export function FundExplorer() {
   const [displayLimit, setDisplayLimit] = useState(20);
 
   const { data: allFunds = [], isLoading, error } = useMutualFunds(filters);
+  const { weights } = useScoringConfig();
 
   const fundHouses = useMemo(() => Array.from(new Set(allFunds.map(f => f.fundHouse))).filter(Boolean).sort(), [allFunds]);
   const subCategories = useMemo(() => Array.from(new Set(allFunds.map(f => f.subCategory))).filter(Boolean).sort(), [allFunds]);
@@ -58,6 +61,10 @@ export function FundExplorer() {
       let bValue: number;
 
       switch (sortField) {
+        case 'aiScore':
+          aValue = calculateFundScore(a, weights);
+          bValue = calculateFundScore(b, weights);
+          break;
         case 'returns':
           aValue = a.returns?.oneYear || -999;
           bValue = b.returns?.oneYear || -999;
@@ -240,6 +247,7 @@ export function FundExplorer() {
           {/* Sort Options */}
           <div className="flex flex-wrap gap-2">
             <span className="text-sm text-muted-foreground self-center">Sort by:</span>
+            <SortButton field="aiScore">AI Score</SortButton>
             <SortButton field="returns">1Y Return</SortButton>
             <SortButton field="returns3Y">3Y Return</SortButton>
             <SortButton field="returns5Y">5Y Return</SortButton>
@@ -390,7 +398,8 @@ export function FundExplorer() {
                 </p>
                 {allFunds.length > displayLimit && (
                   <p className="text-xs text-muted-foreground">
-                    Sorted by {sortField === 'returns' ? '1Y Returns' : 
+                    Sorted by {sortField === 'aiScore' ? 'AI Score' :
+                              sortField === 'returns' ? '1Y Returns' : 
                               sortField === 'returns3Y' ? '3Y Returns' :
                               sortField === 'returns5Y' ? '5Y Returns' :
                               sortField === 'expenseRatio' ? 'Expense Ratio' :

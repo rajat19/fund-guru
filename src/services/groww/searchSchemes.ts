@@ -21,6 +21,8 @@ export const batchProcessSearchData = async (
   searchIds: string[],
   batchSize: number = 10,
   delayMs: number = 500,
+  onProgress?: (msg: string) => void,
+  signal?: AbortSignal
 ): Promise<Record<string, GrowwSearchResponse>> => {
   if (searchIds.length === 0) {
     return {};
@@ -29,16 +31,32 @@ export const batchProcessSearchData = async (
   console.log(`🔍 Processing ${searchIds.length} search data in batches of ${batchSize}...`);
 
   const results: Record<string, GrowwSearchResponse> = {};
+  const totalBatches = Math.ceil(searchIds.length / batchSize);
 
   for (let i = 0; i < searchIds.length; i += batchSize) {
+    if (signal?.aborted) {
+      console.log('⚠️ Batch processing search data cancelled by user.');
+      throw new Error('Sync cancelled by user');
+    }
+
+    const currentBatchNum = Math.floor(i / batchSize) + 1;
+    const msg = `Fetching search batch ${currentBatchNum}/${totalBatches}`;
+    console.log(`📊 ${msg}...`);
+    if (onProgress) onProgress(msg);
+
     const batch = searchIds.slice(i, i + batchSize);
-    console.log(
-      `📊 Processing search batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(searchIds.length / batchSize)}...`,
-    );
 
     const batchPromises = batch.map(async (searchId) => {
       try {
-        return await getSchemeSearchData(searchId);
+        const result = await getSchemeSearchData(searchId);
+        
+        // Detect if the fund was replaced or is invalid
+        if (result.search_id !== searchId || !result.scheme_name) {
+          console.warn(`⚠️ Fund replaced or invalid: ${searchId} (redirects to ${result.search_id || 'unknown'}). Skipping.`);
+          return null;
+        }
+        
+        return { originalId: searchId, data: result };
       } catch (error) {
         console.error(`❌ Error fetching search data for ${searchId}:`, error);
         return null;
@@ -46,9 +64,9 @@ export const batchProcessSearchData = async (
     });
 
     const batchResults = await Promise.all(batchPromises);
-    batchResults.forEach((result, index) => {
-      if (result) {
-        results[result.search_id] = result;
+    batchResults.forEach((item) => {
+      if (item) {
+        results[item.originalId] = item.data;
       }
     });
 

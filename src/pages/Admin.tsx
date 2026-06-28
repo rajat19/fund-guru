@@ -1,16 +1,28 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { useQuery } from '@tanstack/react-query';
-import { getMetadata, type FirebaseMetadata } from '@/services/firebaseService';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getMetadata, type FirebaseMetadata, saveFundsInBatches } from '@/services/firebaseService';
 import { executeSync, type SyncProgress, type SyncResult } from '@/services/syncOrchestrator';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
+import { setLocalCache } from '@/utils/cache';
+import { ScoringConfigSection } from '@/components/ScoringConfigSection';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import {
   RefreshCw,
   Shield,
@@ -22,19 +34,37 @@ import {
   Clock,
   Database,
   Loader2,
+  UploadCloud,
 } from 'lucide-react';
 import { format } from 'date-fns';
 
 export default function Admin() {
   const { user, isAdmin, isLoading: authLoading, signInWithGoogle } = useAuth();
+  const queryClient = useQueryClient();
 
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncType, setSyncType] = useState<'quick' | 'full' | 'upload' | null>(null);
+  const isSyncing = syncType !== null;
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncStartTime, setSyncStartTime] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  // Live timer
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isSyncing && syncStartTime) {
+      interval = setInterval(() => {
+        setElapsedSeconds(Math.floor((Date.now() - syncStartTime) / 1000));
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isSyncing, syncStartTime]);
+  
+  // Abort controller for cancellation
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Sync options
-  const [schemeLimit, setSchemeLimit] = useState<string>('20');
   const [skipFirebase, setSkipFirebase] = useState(false);
 
   // Fetch last sync metadata
@@ -45,16 +75,21 @@ export default function Admin() {
     enabled: isAdmin,
   });
 
-  const handleSync = useCallback(async () => {
-    setIsSyncing(true);
+  const executeSyncAction = useCallback(async (isFullSync: boolean) => {
+    setSyncType(isFullSync ? 'full' : 'quick');
+    setSyncStartTime(Date.now());
+    setElapsedSeconds(0);
     setSyncResult(null);
     setSyncError(null);
     setSyncProgress(null);
 
+    abortControllerRef.current = new AbortController();
+
     try {
       const result = await executeSync({
-        maxSchemesToFetch: schemeLimit ? parseInt(schemeLimit, 10) : undefined,
+        maxSchemesToFetch: isFullSync ? undefined : 20,
         skipFirebase,
+        signal: abortControllerRef.current.signal,
         onProgress: (progress) => {
           setSyncProgress({ ...progress });
         },
@@ -62,13 +97,138 @@ export default function Admin() {
 
       setSyncResult(result);
       refetchMetadata();
+      
+      // Force UI to refetch from IndexedDB which was just updated
+      queryClient.invalidateQueries({ queryKey: ['mutual-funds'] });
+      queryClient.invalidateQueries({ queryKey: ['mutual-funds-by-category'] });
+      queryClient.invalidateQueries({ queryKey: ['top-performing-funds'] });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      setSyncError(errorMsg);
+      if (errorMsg === 'Sync cancelled by user') {
+        setSyncError('Synchronization was cancelled by the user.');
+      } else {
+        setSyncError(errorMsg);
+      }
     } finally {
-      setIsSyncing(false);
+      setSyncType(null);
+      setSyncStartTime(null);
+      abortControllerRef.current = null;
     }
-  }, [schemeLimit, skipFirebase, refetchMetadata]);
+  }, [skipFirebase, refetchMetadata]);
+
+  const handleQuickSync = () => executeSyncAction(false);
+  const handleFullSync = () => executeSyncAction(true);
+
+  const handleCancel = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  };
+
+  const handleUploadCache = useCallback(async () => {
+    setSyncType('upload');
+    setSyncStartTime(Date.now());
+    setElapsedSeconds(0);
+    setSyncResult(null);
+    setSyncError(null);
+    setSyncProgress(null);
+
+    abortControllerRef.current = new AbortController();
+
+    try {
+      setSyncProgress({
+        step: 'fetching',
+        stepLabel: 'Downloading local cache file...',
+        processed: 0,
+        total: 0,
+        errors: [],
+      });
+
+      const response = await fetch('/data/funds-cache.json');
+      if (!response.ok) {
+        throw new Error(`Failed to load cache file: ${response.statusText}`);
+      }
+
+      const funds = await response.json();
+      
+      setSyncProgress({
+        step: 'saving',
+        stepLabel: 'Uploading cache to Firebase...',
+        processed: 0,
+        total: funds.length,
+        errors: [],
+      });
+
+      const startTime = Date.now();
+      await saveFundsInBatches(
+        funds,
+        500,
+        (saved, total) => {
+          setSyncProgress({
+            step: 'saving',
+            stepLabel: 'Uploading cache to Firebase...',
+            processed: saved,
+            total,
+            errors: [],
+          });
+        },
+        abortControllerRef.current.signal,
+        true // isFullSync
+      );
+
+      const duration = Math.round((Date.now() - startTime) / 1000);
+
+      setSyncProgress({
+        step: 'complete',
+        stepLabel: 'Upload complete!',
+        processed: funds.length,
+        total: funds.length,
+        errors: [],
+      });
+
+      setSyncResult({
+        totalProcessed: funds.length,
+        totalErrors: 0,
+        duration,
+        exportedFiles: [],
+        summary: {
+          schemes: funds.length,
+          processed: funds.length,
+          saved: funds.length,
+        },
+      });
+
+      // Update the IndexedDB cache with the newly uploaded data so UI updates instantly
+      await setLocalCache('all_mutual_funds', funds);
+
+      refetchMetadata();
+      
+      // Force UI to refetch from IndexedDB
+      queryClient.invalidateQueries({ queryKey: ['mutual-funds'] });
+      queryClient.invalidateQueries({ queryKey: ['mutual-funds-by-category'] });
+      queryClient.invalidateQueries({ queryKey: ['top-performing-funds'] });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (errorMsg === 'Sync cancelled by user') {
+        setSyncError('Upload was cancelled by the user.');
+      } else {
+        setSyncError(errorMsg);
+      }
+    } finally {
+      setSyncType(null);
+      setSyncStartTime(null);
+      abortControllerRef.current = null;
+    }
+  }, [refetchMetadata]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   const getProgressPercent = (): number => {
     if (!syncProgress || syncProgress.total === 0) return 0;
@@ -229,23 +389,8 @@ export default function Admin() {
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Options */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="scheme-limit">Max Schemes to Fetch</Label>
-              <Input
-                id="scheme-limit"
-                type="number"
-                placeholder="Leave empty for all"
-                value={schemeLimit}
-                onChange={(e) => setSchemeLimit(e.target.value)}
-                disabled={isSyncing}
-                min={1}
-              />
-              <p className="text-xs text-muted-foreground">
-                Limit the number of schemes. Use a small number (e.g. 20) for testing.
-              </p>
-            </div>
-            <div className="flex items-center space-x-3 pt-6">
+          <div className="grid grid-cols-1 gap-4">
+            <div className="flex items-center space-x-3">
               <Switch
                 id="skip-firebase"
                 checked={skipFirebase}
@@ -258,39 +403,161 @@ export default function Admin() {
             </div>
           </div>
 
-          {/* Sync Button */}
-          <Button onClick={handleSync} disabled={isSyncing} size="lg" className="gap-2 w-full sm:w-auto">
-            {isSyncing ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Syncing...
-              </>
-            ) : (
-              <>
-                <RefreshCw className="h-4 w-4" />
-                Sync Mutual Funds
-              </>
-            )}
-          </Button>
+          {/* Sync Buttons */}
+          <div className="space-y-4">
+            {/* Safe Row */}
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button onClick={handleQuickSync} disabled={isSyncing} size="lg" className="gap-2 w-full sm:w-auto">
+                {syncType === 'quick' ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Syncing...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4" />
+                    Quick Sync (20 Funds)
+                  </>
+                )}
+              </Button>
+              <Button 
+                onClick={handleUploadCache} 
+                disabled={isSyncing} 
+                variant="outline" 
+                size="lg" 
+                className="gap-2 w-full sm:w-auto"
+              >
+                {syncType === 'upload' ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <UploadCloud className="h-4 w-4" />
+                    Upload Local Cache
+                  </>
+                )}
+              </Button>
+              {isSyncing && (
+                <Button onClick={handleCancel} variant="destructive" size="lg" className="gap-2 w-full sm:w-auto">
+                  <XCircle className="h-4 w-4" />
+                  Cancel Sync
+                </Button>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* Destructive Row */}
+            <div>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button disabled={isSyncing} variant="destructive" size="lg" className="gap-2 w-full sm:w-auto">
+                    {syncType === 'full' ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Syncing...
+                      </>
+                    ) : (
+                      <>
+                        <AlertTriangle className="h-4 w-4" />
+                        Full Sync Database
+                      </>
+                    )}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This action will fetch over 1,700 funds from the Groww API and overwrite your entire Firebase database. 
+                      It will also permanently delete any stale or orphaned funds that are no longer available.
+                      This process can take several minutes.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleFullSync} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                      Continue with Full Sync
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          </div>
 
           {/* Progress */}
           {syncProgress && isSyncing && (
-            <div className="space-y-3 rounded-lg border p-4 bg-muted/30">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium">{syncProgress.stepLabel}</p>
-                <Badge variant="outline" className="text-xs">
-                  {syncProgress.step}
-                </Badge>
-              </div>
-              <Progress value={getProgressPercent()} className="h-2" />
-              <p className="text-xs text-muted-foreground">
-                {syncProgress.processed} / {syncProgress.total} items
-                {syncProgress.errors.length > 0 && (
-                  <span className="text-destructive ml-2">
-                    ({syncProgress.errors.length} errors)
+            <div className="space-y-4 rounded-lg border p-5 bg-muted/20">
+              <div className="flex flex-col space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-medium text-sm">Sync Progress</h3>
+                  <span className="text-xs font-mono text-muted-foreground flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    {Math.floor(elapsedSeconds / 60)}m {elapsedSeconds % 60}s
                   </span>
-                )}
-              </p>
+                </div>
+                
+                <div className="space-y-4 pt-2">
+                  {[
+                    { id: 'fetching', label: '1. Fetching base schemes' },
+                    { id: 'enhancing', label: '2. Fetching enhanced stats & search data' },
+                    { id: 'processing', label: '3. Processing and transforming funds' },
+                    { id: 'exporting', label: '4. Updating local cache' },
+                    { id: 'saving', label: '5. Saving to Firebase' }
+                  ].map((stepConfig) => {
+                    const stepOrder = syncType === 'upload' 
+                      ? ['fetching', 'saving'] 
+                      : ['fetching', 'enhancing', 'processing', 'exporting', 'saving'];
+                      
+                    const currentStepIndex = syncProgress.step === 'complete' || syncProgress.step === 'error'
+                      ? stepOrder.length
+                      : stepOrder.indexOf(syncProgress.step);
+                      
+                    const thisStepIndex = stepOrder.indexOf(stepConfig.id);
+                    
+                    if (thisStepIndex === -1) return null;
+
+                    const isCompleted = thisStepIndex < currentStepIndex;
+                    const isActive = thisStepIndex === currentStepIndex;
+                    const isPending = thisStepIndex > currentStepIndex;
+
+                    return (
+                      <div key={stepConfig.id} className={`flex flex-col space-y-2 ${isPending ? 'opacity-40' : ''}`}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            {isCompleted && <CheckCircle2 className="h-4 w-4 text-green-500" />}
+                            {isActive && <Loader2 className="h-4 w-4 text-primary animate-spin" />}
+                            {isPending && <div className="h-4 w-4 rounded-full border-2" />}
+                            <span className={`text-sm ${isActive ? 'font-medium text-primary' : 'text-muted-foreground'}`}>
+                              {stepConfig.label}
+                            </span>
+                          </div>
+                          {isActive && syncProgress.total > 0 && (
+                            <span className="text-xs font-mono">
+                              {syncProgress.processed} / {syncProgress.total}
+                            </span>
+                          )}
+                        </div>
+                        {isActive && (
+                          <div className="pl-6 space-y-2">
+                            <p className="text-xs text-muted-foreground italic truncate">
+                              {syncProgress.stepLabel}
+                              {syncProgress.errors.length > 0 && (
+                                <span className="text-destructive ml-2 font-normal not-italic">
+                                  ({syncProgress.errors.length} errors)
+                                </span>
+                              )}
+                            </p>
+                            <Progress value={getProgressPercent()} className="h-1.5" />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
 
@@ -336,6 +603,9 @@ export default function Admin() {
           )}
         </CardContent>
       </Card>
+
+      {/* AI Scoring Configuration */}
+      <ScoringConfigSection />
     </div>
   );
 }

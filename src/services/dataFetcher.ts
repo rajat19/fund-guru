@@ -22,7 +22,12 @@ export interface FetchOptions {
 /**
  * Fetch all enhanced data (stats + search) for given schemes
  */
-export const fetchEnhancedData = async (schemes: GrowwScheme[], options: FetchOptions = {}): Promise<FetchedData> => {
+export const fetchEnhancedData = async (
+  schemes: GrowwScheme[],
+  options: FetchOptions = {},
+  signal?: AbortSignal,
+  onProgress?: (msg: string) => void
+): Promise<FetchedData> => {
   const fetchOptions = {
     statsBatchSize: options.statsBatchSize ?? 10,
     searchBatchSize: options.searchBatchSize ?? 10,
@@ -42,10 +47,12 @@ export const fetchEnhancedData = async (schemes: GrowwScheme[], options: FetchOp
 
   console.log(`🔢 Processing ${schemeCodes.length} scheme codes and ${searchIds.length} search IDs`);
 
+  if (signal?.aborted) throw new Error('Sync cancelled by user');
+
   // Fetch both types of data in parallel
   const [schemeStats, searchData] = await Promise.all([
-    schemeCodes.length > 0 ? fetchSchemeStats(schemeCodes, fetchOptions) : Promise.resolve({}),
-    searchIds.length > 0 ? fetchSearchData(searchIds, fetchOptions) : Promise.resolve({}),
+    schemeCodes.length > 0 ? fetchSchemeStats(schemeCodes, fetchOptions, signal, onProgress) : Promise.resolve({}),
+    searchIds.length > 0 ? fetchSearchData(searchIds, fetchOptions, signal, onProgress) : Promise.resolve({}),
   ]);
 
   console.log(`✅ Fetched stats for ${Object.keys(schemeStats).length} schemes`);
@@ -57,15 +64,23 @@ export const fetchEnhancedData = async (schemes: GrowwScheme[], options: FetchOp
 /**
  * Fetch scheme statistics with error handling
  */
-const fetchSchemeStats = async (schemeCodes: number[], options: Required<FetchOptions>): Promise<Record<number, GrowwSchemeStatsResponse>> => {
+const fetchSchemeStats = async (
+  schemeCodes: number[],
+  options: Required<FetchOptions>,
+  signal?: AbortSignal,
+  onProgress?: (msg: string) => void
+): Promise<Record<number, GrowwSchemeStatsResponse>> => {
   try {
     console.log('📊 Fetching scheme statistics...');
     return await batchProcessSchemeStats(
       schemeCodes, 
       options.statsBatchSize, 
-      options.statsDelay
+      options.statsDelay,
+      onProgress,
+      signal
     );
   } catch (error) {
+    if (error instanceof Error && error.message === 'Sync cancelled by user') throw error;
     console.warn('⚠️ Failed to fetch scheme stats, continuing with empty data:', error);
     return {};
   }
@@ -74,15 +89,23 @@ const fetchSchemeStats = async (schemeCodes: number[], options: Required<FetchOp
 /**
  * Fetch search data with error handling
  */
-const fetchSearchData = async (searchIds: string[], options: Required<FetchOptions>): Promise<Record<string, GrowwSearchResponse>> => {
+const fetchSearchData = async (
+  searchIds: string[],
+  options: Required<FetchOptions>,
+  signal?: AbortSignal,
+  onProgress?: (msg: string) => void
+): Promise<Record<string, GrowwSearchResponse>> => {
   try {
     console.log('🔍 Fetching search data...');
     return await batchProcessSearchData(
       searchIds, 
       options.searchBatchSize, 
-      options.searchDelay
+      options.searchDelay,
+      onProgress,
+      signal
     );
   } catch (error) {
+    if (error instanceof Error && error.message === 'Sync cancelled by user') throw error;
     console.warn('⚠️ Failed to fetch search data, continuing with empty data:', error);
     return {};
   }

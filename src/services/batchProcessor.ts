@@ -14,6 +14,7 @@ export interface BatchProcessorOptions {
   batchDelay?: number;
   onProgress?: (processed: number, total: number) => void;
   onError?: (error: Error, scheme: GrowwScheme) => void;
+  signal?: AbortSignal;
 }
 
 /**
@@ -29,6 +30,7 @@ export const processSchemes = async (
     batchDelay: options.batchDelay ?? 100,
     onProgress: options.onProgress,
     onError: options.onError,
+    signal: options.signal,
   };
 
   console.log(`🔄 Processing ${schemes.length} schemes in batches of ${batchOptions.batchSize}...`);
@@ -38,6 +40,11 @@ export const processSchemes = async (
   let errors = 0;
 
   for (let i = 0; i < schemes.length; i += batchOptions.batchSize) {
+    if (batchOptions.signal?.aborted) {
+      console.log('⚠️ Scheme processing cancelled by user.');
+      throw new Error('Sync cancelled by user');
+    }
+
     const batch = schemes.slice(i, i + batchOptions.batchSize);
     
     console.log(
@@ -46,6 +53,15 @@ export const processSchemes = async (
 
     for (const scheme of batch) {
       try {
+        const search = enhancedData.searchData[scheme.id];
+        
+        // If search data is missing, the fund is likely replaced/invalid (dropped in searchSchemes.ts)
+        if (!search) {
+          console.warn(`⏭️ Skipping scheme ${scheme.id} (no valid search data, likely replaced)`);
+          processed++;
+          continue;
+        }
+
         const processedFund = processScheme(scheme, enhancedData);
         processedFunds.push(processedFund);
         processed++;

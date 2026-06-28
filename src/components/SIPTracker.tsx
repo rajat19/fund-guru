@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { useMutualFunds } from '@/hooks/useMutualFunds';
 import { calculateFundScore } from '@/utils/scoringEngine';
+import { useScoringConfig } from '@/hooks/useScoringConfig';
 import {
   PiggyBank,
   Plus,
@@ -44,6 +45,7 @@ interface SIP {
 export function SIPTracker() {
   const { toast } = useToast();
   const { data: allFunds = [], isLoading: fundsLoading } = useMutualFunds();
+  const { weights } = useScoringConfig();
   const [sips, setSips] = useState<SIP[]>([
     {
       id: 'SIP001',
@@ -133,7 +135,7 @@ export function SIPTracker() {
         const fund = allFunds.find((f) => f.id === sip.fundId);
         if (!fund) return null;
 
-        const score = calculateFundScore(fund);
+        const score = calculateFundScore(fund, weights);
         const performance = ((sip.currentValue - sip.totalInvested) / sip.totalInvested) * 100;
 
         let recommendation: 'continue' | 'pause' | 'stop' = 'continue';

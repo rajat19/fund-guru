@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutualFunds, useSyncMutualFunds, MutualFundsFilters } from '@/hooks/useMutualFunds';
+import { useAuth } from '@/hooks/useAuth';
 import { getTopFundsByCategory, getRecommendations } from '@/utils/scoringEngine';
 import { FundCard } from './FundCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,6 +24,8 @@ export function Dashboard() {
   const [riskTolerance, setRiskTolerance] = useState<'Low' | 'Moderate' | 'High'>('Moderate');
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<MutualFundsFilters>({});
+  
+  const { isAdmin } = useAuth();
 
   const { data: allFunds = [], isLoading, error } = useMutualFunds(filters);
   const syncMutation = useSyncMutualFunds();
@@ -126,17 +129,19 @@ export function Dashboard() {
               </div>
             </div>
             <div className="pt-4">
-              <Button
-                onClick={() => syncMutation.mutate({ incremental: true })}
-                disabled={syncMutation.isPending}
-                variant="outline"
-                className="mr-2"
-              >
-                <RefreshCw
-                  className={`h-4 w-4 mr-2 ${syncMutation.isPending ? 'animate-spin' : ''}`}
-                />
-                Refresh Data
-              </Button>
+              {isAdmin && (
+                <Button
+                  onClick={() => syncMutation.mutate({ incremental: true })}
+                  disabled={syncMutation.isPending}
+                  variant="outline"
+                  className="mr-2"
+                >
+                  <RefreshCw
+                    className={`h-4 w-4 mr-2 ${syncMutation.isPending ? 'animate-spin' : ''}`}
+                  />
+                  Refresh Data
+                </Button>
+              )}
               <Button
                 onClick={() => setShowFilters(!showFilters)}
                 variant="outline"

@@ -6,6 +6,7 @@
 
 import { exportToCSV as generateCSV } from '@/services/dataProcessor';
 import type { MutualFund } from '@/types/mutualFund';
+import { setLocalCache } from '@/utils/cache';
 
 export interface ExportOptions {
   filename?: string;
@@ -113,6 +114,32 @@ export const exportToJSON = async (funds: MutualFund[], options: ExportOptions =
   } catch (error) {
     console.error('❌ Failed to export JSON:', error);
     throw new Error(`Failed to export JSON: ${error}`);
+  }
+};
+
+/**
+ * Update the local development cache file (public/data/funds-cache.json)
+ */
+export const updateLocalCache = async (funds: MutualFund[]): Promise<void> => {
+  console.log('💾 Updating local API caches...');
+
+  try {
+    if (typeof window === 'undefined') {
+      const jsonData = JSON.stringify(funds, null, 2);
+      const cachePath = 'public/data/funds-cache.json';
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      
+      const dir = path.dirname(cachePath);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(cachePath, jsonData);
+      console.log(`✅ Local JSON cache updated successfully`);
+    } else {
+      await setLocalCache('all_mutual_funds', funds);
+      console.log(`✅ Local IndexedDB cache updated successfully`);
+    }
+  } catch (error) {
+    console.error('❌ Failed to update local cache:', error);
   }
 };
 

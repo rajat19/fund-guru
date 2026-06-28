@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { clearLocalCache } from '../utils/cache';
 import {
   getAllFunds,
   getFundsByCategory,
@@ -96,7 +97,10 @@ export function useSyncMutualFunds() {
 
       return { message: 'Sync completed successfully' };
     },
-    onSuccess: () => {
+    onSuccess: async () => {
+      // Clear the IndexedDB browser cache so we pull fresh data from Firebase
+      await clearLocalCache('all_mutual_funds').catch(console.error);
+      
       // Invalidate all fund-related queries to refetch from Firebase
       queryClient.invalidateQueries({ queryKey: ['mutual-funds'] });
       queryClient.invalidateQueries({ queryKey: ['mutual-funds-by-category'] });

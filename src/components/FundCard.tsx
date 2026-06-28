@@ -1,16 +1,28 @@
 import { MutualFund } from '@/types/mutualFund';
+import { calculateFundScore } from '@/utils/scoringEngine';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { TrendingUp, TrendingDown, Shield, DollarSign } from 'lucide-react';
+import { TrendingUp, TrendingDown, Shield, DollarSign, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useMemo } from 'react';
+import { useScoringConfig } from '@/hooks/useScoringConfig';
 
 interface FundCardProps {
   fund: MutualFund & { score?: number; rank?: number };
+  onClick?: (fund: MutualFund) => void;
   showScore?: boolean;
 }
 
-export function FundCard({ fund, showScore = false }: FundCardProps) {
+export function FundCard({ fund, onClick, showScore = false }: FundCardProps) {
   const navigate = useNavigate();
+  const { weights } = useScoringConfig();
+
+  const aiScore = useMemo(() => {
+    if (fund.score != null) return fund.score;
+    if (showScore) return calculateFundScore(fund, weights);
+    return null;
+  }, [fund, showScore, weights]);
+
   const formatReturn = (value: number | null) => {
     if (value === null) return 'N/A';
     return value > 0 ? `+${value.toFixed(2)}%` : `${value.toFixed(2)}%`;
@@ -39,23 +51,17 @@ export function FundCard({ fund, showScore = false }: FundCardProps) {
 
   return (
     <Card
-      className="group glass-card animate-fade-in-up cursor-pointer"
+      className="group glass-card animate-fade-in-up cursor-pointer h-full flex flex-col"
       onClick={() => navigate(`/fund/${fund.id}`)}
     >
       <CardHeader className="pb-3">
         <div className="flex justify-between items-start gap-3">
           <div className="flex-1 min-w-0">
-            <CardTitle className="text-lg font-semibold text-card-foreground truncate">
+            <CardTitle className="text-lg font-semibold text-card-foreground leading-snug">
               {fund.schemeName}
             </CardTitle>
             <p className="text-sm text-muted-foreground mt-1">{fund.fundHouse}</p>
           </div>
-          {showScore && fund.score && (
-            <div className="text-right flex-shrink-0">
-              <div className="text-2xl font-bold text-primary">{fund.score}</div>
-              {fund.rank && <div className="text-xs text-muted-foreground">Rank #{fund.rank}</div>}
-            </div>
-          )}
         </div>
         <div className="flex gap-2 mt-2">
           <Badge variant="outline">{fund.category}</Badge>
@@ -65,9 +71,15 @@ export function FundCard({ fund, showScore = false }: FundCardProps) {
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 flex-1 flex flex-col">
         {/* Returns Grid */}
         <div className="grid grid-cols-3 gap-3">
+          <div className="text-center">
+            <div className="text-xs text-muted-foreground">6M Return</div>
+            <div className={`font-semibold ${getReturnColor(fund.returns.sixMonth)}`}>
+              {formatReturn(fund.returns.sixMonth)}
+            </div>
+          </div>
           <div className="text-center">
             <div className="text-xs text-muted-foreground">1Y Return</div>
             <div className={`font-semibold ${getReturnColor(fund.returns.oneYear)}`}>
@@ -78,12 +90,6 @@ export function FundCard({ fund, showScore = false }: FundCardProps) {
             <div className="text-xs text-muted-foreground">3Y Return</div>
             <div className={`font-semibold ${getReturnColor(fund.returns.threeYear)}`}>
               {formatReturn(fund.returns.threeYear)}
-            </div>
-          </div>
-          <div className="text-center">
-            <div className="text-xs text-muted-foreground">5Y Return</div>
-            <div className={`font-semibold ${getReturnColor(fund.returns.fiveYear)}`}>
-              {formatReturn(fund.returns.fiveYear)}
             </div>
           </div>
         </div>
@@ -110,11 +116,16 @@ export function FundCard({ fund, showScore = false }: FundCardProps) {
           </div>
         </div>
 
-        {/* AUM */}
-        <div className="flex justify-between items-center pt-2 border-t border-border">
-          <span className="text-sm text-muted-foreground">AUM</span>
-          <span className="font-semibold">₹{(fund.aum / 100).toFixed(0)}K Cr</span>
-        </div>
+        {/* AI Score */}
+        {aiScore != null && (
+          <div className="flex justify-between items-center pt-2 border-t border-border mt-auto">
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <span className="text-sm font-medium text-muted-foreground">AI Score</span>
+            </div>
+            <span className="text-lg font-bold text-primary">{aiScore}</span>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

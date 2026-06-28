@@ -7,7 +7,7 @@
 import { getAllSchemes } from '@/services/groww';
 import { fetchEnhancedData } from '@/services/dataFetcher';
 import { processSchemes } from '@/services/batchProcessor';
-import { exportToCSV, exportToJSON } from '@/services/dataExporter';
+import { exportToCSV, exportToJSON, updateLocalCache } from '@/services/dataExporter';
 import { saveFundsInBatches } from '@/services/firebaseService';
 import { createProgressCallback } from '@/utils/progressTracker';
 import type { GrowwScheme } from '@/types/api';
@@ -33,6 +33,7 @@ export interface SyncOptions {
   skipFirebase?: boolean;
   maxSchemesToFetch?: number;
   onProgress?: SyncProgressCallback;
+  signal?: AbortSignal;
 }
 
 export interface SyncResult {
@@ -60,16 +61,28 @@ export const executeSync = async (options: SyncOptions = {}): Promise<SyncResult
   try {
     // Step 1: Fetch schemes
     reportProgress({ step: 'fetching', stepLabel: 'Fetching schemes from Groww...', processed: 0, total: 0, errors });
-    const schemes = await fetchSchemes(options);
-    reportProgress({ step: 'fetching', stepLabel: 'Fetching schemes from Groww...', processed: schemes.length, total: schemes.length, errors });
+    const schemes = await fetchSchemes(options, (msg) => {
+      const match = msg.match(/page (\d+)\/(\d+)/);
+      if (match) {
+        const pageNum = parseInt(match[1], 10);
+        const totalPages = parseInt(match[2], 10);
+        reportProgress({ step: 'fetching', stepLabel: msg, processed: pageNum, total: totalPages, errors });
+      } else {
+        reportProgress({ step: 'fetching', stepLabel: msg, processed: 0, total: 0, errors });
+      }
+    });
+    reportProgress({ step: 'fetching', stepLabel: 'Schemes fetched successfully', processed: schemes.length, total: schemes.length, errors });
 
-    // Step 2: Enhance data
+    // Step 2: Enhance & Process data
     reportProgress({ step: 'enhancing', stepLabel: 'Fetching enhanced data (stats & search)...', processed: 0, total: schemes.length, errors });
-    const processedFunds = await processSchemesWithData(schemes, (processed, total) => {
-      reportProgress({ step: 'enhancing', stepLabel: 'Fetching enhanced data (stats & search)...', processed, total, errors });
+    const processedFunds = await processSchemesWithData(schemes, options, (step, processed, total, stepLabel) => {
+      reportProgress({ step, stepLabel: stepLabel || 'Fetching enhanced data (stats & search)...', processed, total, errors });
     });
 
-    // Step 3: Export data if requested
+    // Step 3: Export data & Update Local Cache
+    if (options.signal?.aborted) throw new Error('Sync cancelled by user');
+    reportProgress({ step: 'exporting', stepLabel: 'Updating local cache...', processed: 0, total: processedFunds.length, errors });
+    await updateLocalCache(processedFunds);
     const exportedFiles = await exportData(processedFunds, options);
     
     // Step 4: Save to Firebase
@@ -109,11 +122,26 @@ export const executeSync = async (options: SyncOptions = {}): Promise<SyncResult
 /**
  * Fetch schemes from Groww API
  */
-const fetchSchemes = async (options: SyncOptions): Promise<GrowwScheme[]> => {
+const fetchSchemes = async (options: SyncOptions, onProgress?: (msg: string) => void): Promise<GrowwScheme[]> => {
   console.log('\n📡 Fetching schemes from Groww API...');
   
-  let schemes = await getAllSchemes(options.maxSchemesToFetch);
-  console.log(`📊 Fetched ${schemes.length} schemes`);
+  if (options.signal?.aborted) throw new Error('Sync cancelled by user');
+  let rawSchemes = await getAllSchemes(options.maxSchemesToFetch, onProgress, options.signal);
+  
+  // Deduplicate by scheme.id (Groww API sometimes returns duplicates across pages)
+  const uniqueMap = new Map<string, GrowwScheme>();
+  for (const s of rawSchemes) {
+    if (s.id) uniqueMap.set(s.id, s);
+  }
+  
+  // Immediately filter out schemes with invalid or missing scheme_codes
+  // A fund without a valid scheme code is unusable for our app.
+  let schemes = Array.from(uniqueMap.values()).filter(s => {
+    const code = parseInt(String(s.scheme_code), 10);
+    return !isNaN(code);
+  });
+
+  console.log(`📊 Fetched ${rawSchemes.length} raw schemes, kept ${schemes.length} valid unique schemes.`);
 
   if (options.limit) {
     schemes = schemes.slice(0, options.limit);
@@ -128,19 +156,43 @@ const fetchSchemes = async (options: SyncOptions): Promise<GrowwScheme[]> => {
  */
 const processSchemesWithData = async (
   schemes: GrowwScheme[],
-  onEnhanceProgress?: (processed: number, total: number) => void,
+  options: SyncOptions,
+  onStepProgress?: (step: SyncStep, processed: number, total: number, stepLabel?: string) => void,
 ): Promise<MutualFund[]> => {
   console.log('\n🔄 Processing schemes with enhanced data...');
   
+  if (options.signal?.aborted) throw new Error('Sync cancelled by user');
+
   // Fetch all enhanced data upfront
-  const enhancedData = await fetchEnhancedData(schemes, {
-    statsBatchSize: 10,
-    searchBatchSize: 10,
-    statsDelay: 500,
-    searchDelay: 500,
-  });
+  let currentEnhancedProgress = 0;
+
+  const enhancedData = await fetchEnhancedData(
+    schemes, 
+    {
+      statsBatchSize: 10,
+      searchBatchSize: 10,
+      statsDelay: 500,
+      searchDelay: 500,
+    },
+    options.signal,
+    (msg) => {
+      const match = msg.match(/batch (\d+)\/(\d+)/);
+      if (match) {
+        const batchNum = parseInt(match[1], 10);
+        // Each batch is 10 items. We use Math.max so it never goes backwards if the parallel requests resolve out of order.
+        currentEnhancedProgress = Math.max(currentEnhancedProgress, batchNum * 10);
+        const displayProcessed = Math.min(currentEnhancedProgress, schemes.length);
+        onStepProgress?.('enhancing', displayProcessed, schemes.length, msg);
+      } else {
+        onStepProgress?.('enhancing', currentEnhancedProgress, schemes.length, msg);
+      }
+    }
+  );
   
   // Process schemes in batches
+  if (options.signal?.aborted) throw new Error('Sync cancelled by user');
+  onStepProgress?.('processing', 0, schemes.length, 'Processing and transforming funds...');
+  
   const progressCallback = createProgressCallback('Processing', 50);
   const processedFunds = await processSchemes(
     schemes, 
@@ -150,8 +202,9 @@ const processSchemesWithData = async (
       batchDelay: 100,
       onProgress: (processed, total) => {
         progressCallback(processed, total);
-        onEnhanceProgress?.(processed, total);
+        onStepProgress?.('processing', processed, total, 'Transforming Groww data into MutualFund models...');
       },
+      signal: options.signal
     }
   );
 
@@ -193,12 +246,21 @@ const saveToFirebase = async (
   }
 
   console.log('\n🔥 Saving to Firebase...');
+  if (options.signal?.aborted) throw new Error('Sync cancelled by user');
   const progressCallback = createProgressCallback('Firebase', 100);
   
-  await saveFundsInBatches(funds, 500, (saved, total) => {
-    progressCallback(saved, total);
-    onSaveProgress?.(saved, total);
-  });
+  const isFullSync = !options.incremental && !options.limit && !options.maxSchemesToFetch;
+
+  await saveFundsInBatches(
+    funds, 
+    500, 
+    (saved, total) => {
+      progressCallback(saved, total);
+      onSaveProgress?.(saved, total);
+    }, 
+    options.signal,
+    isFullSync
+  );
   return funds.length;
 };
 
