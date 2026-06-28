@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useMutualFunds, MutualFundsFilters } from '@/hooks/useMutualFunds';
 import { useScoringConfig } from '@/hooks/useScoringConfig';
 import { calculateFundScore } from '@/utils/scoringEngine';
+import { getCategoryColor, getRiskColor } from '@/utils/colors';
 import { FundCard } from './FundCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -542,7 +543,7 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
                   <div className="space-y-1">
                     <div className="font-semibold text-foreground">{fund.schemeName}</div>
                     <div className="text-xs text-muted-foreground">{fund.fundHouse}</div>
-                    <Badge variant="outline" className="text-xs">
+                    <Badge variant="outline" className={`text-xs ${getCategoryColor(fund.category)}`}>
                       {fund.category}
                     </Badge>
                   </div>
@@ -559,15 +560,10 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
               {funds.map((fund) => (
                 <td key={fund.id} className="p-3">
                   <Badge
-                    variant={
-                      fund.riskMetrics.risk === 'High'
-                        ? 'destructive'
-                        : fund.riskMetrics.risk === 'Moderate'
-                          ? 'secondary'
-                          : 'outline'
-                    }
+                    variant="outline"
+                    className={getRiskColor(fund.riskMetrics.risk)}
                   >
-                    {fund.riskMetrics.risk}
+                    Risk: {fund.riskMetrics.risk}
                   </Badge>
                 </td>
               ))}

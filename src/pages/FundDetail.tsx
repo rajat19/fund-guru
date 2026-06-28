@@ -2,8 +2,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useFundById } from '@/hooks/useMutualFunds';
 import { useScoringConfig } from '@/hooks/useScoringConfig';
 import { calculateFundScore } from '@/utils/scoringEngine';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { getCategoryColor, getRiskColor } from '@/utils/colors';
+import { FundRecommendations } from '@/components/FundRecommendations';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft,
@@ -21,6 +22,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { Card, CardHeader, CardContent, CardTitle } from '@/components/ui/card';
 
 export default function FundDetail() {
   const { id } = useParams();
@@ -89,17 +91,13 @@ export default function FundDetail() {
     return 'text-loss';
   };
 
-  const getRiskBadgeVariant = (risk: string) => {
-    switch (risk) {
-      case 'Low':
-        return 'default';
-      case 'Moderate':
-        return 'secondary';
-      case 'High':
-        return 'destructive';
-      default:
-        return 'outline';
-    }
+  const formatCurrency = (value: number | null) => {
+    if (value === null) return 'N/A';
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      maximumFractionDigits: 0,
+    }).format(value);
   };
 
   return (
@@ -137,7 +135,9 @@ export default function FundDetail() {
                 </div>
                 <div>
                   <div className="text-sm text-muted-foreground">Category</div>
-                  <Badge variant="outline">{fund.category}</Badge>
+                  <Badge variant="outline" className={getCategoryColor(fund.category)}>
+                    {fund.category}
+                  </Badge>
                 </div>
                 <div>
                   <div className="text-sm text-muted-foreground">Sub-category</div>
@@ -145,7 +145,9 @@ export default function FundDetail() {
                 </div>
                 <div>
                   <div className="text-sm text-muted-foreground">Risk Level</div>
-                  <Badge variant={getRiskBadgeVariant(fund.riskMetrics.risk)}>{fund.riskMetrics.risk}</Badge>
+                  <Badge variant="outline" className={getRiskColor(fund.riskMetrics.risk)}>
+                    Risk: {fund.riskMetrics.risk}
+                  </Badge>
                 </div>
               </div>
             </CardContent>
@@ -327,6 +329,8 @@ export default function FundDetail() {
               </CardContent>
             </Card>
           </div>
+
+          <FundRecommendations currentFund={fund} />
         </div>
       </div>
     </TooltipProvider >

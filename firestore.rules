@@ -3,21 +3,47 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Mutual funds data — public read, admin-only write (or specific email)
+    // Check if user is an admin by verifying email OR checking if their user document has isAdmin: true
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.email == 'rajatsri94@gmail.com' ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+      );
+    }
+    
+    // Mutual funds data — public read, admin-only write
     match /mutual_funds/{fundId} {
       allow read: if true;
-      allow write: if request.auth != null && (request.auth.token.admin == true || request.auth.token.email == 'rajatsri94@gmail.com');
+      allow write: if isAdmin();
     }
     
-    // Sync metadata — public read, admin-only write (or specific email)
+    // Sync metadata — public read, admin-only write
     match /metadata/{docId} {
       allow read: if true;
-      allow write: if request.auth != null && (request.auth.token.admin == true || request.auth.token.email == 'rajatsri94@gmail.com');
+      allow write: if isAdmin();
     }
     
-    // User profiles — users can read/write their own data
+    // App configuration — public read, admin-only write
+    match /app_config/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    // User profiles — strict security to prevent privilege escalation
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Users can read their own profile; Admins can read all profiles
+      allow read: if (request.auth != null && request.auth.uid == userId) || isAdmin();
+      
+      // Users can create their own profile, but MUST set isAdmin to false
+      // Admins can create profiles with any data
+      allow create: if (request.auth != null && request.auth.uid == userId && request.resource.data.isAdmin == false) || isAdmin();
+                    
+      // Users can update their own profile, but CANNOT modify their isAdmin field
+      // Admins can update profiles with any data
+      allow update: if (request.auth != null && request.auth.uid == userId && request.resource.data.isAdmin == resource.data.isAdmin) || isAdmin();
+      
+      // Only admins can delete profiles
+      allow delete: if isAdmin();
     }
     
     // Default deny

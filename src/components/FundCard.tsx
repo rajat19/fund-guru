@@ -6,6 +6,7 @@ import { TrendingUp, TrendingDown, Shield, DollarSign, Sparkles } from 'lucide-r
 import { useNavigate } from 'react-router-dom';
 import { useMemo } from 'react';
 import { useScoringConfig } from '@/hooks/useScoringConfig';
+import { getCategoryColor, getRiskColor } from '@/utils/colors';
 
 interface FundCardProps {
   fund: MutualFund & { score?: number; rank?: number };
@@ -36,19 +37,6 @@ export function FundCard({ fund, onClick, showScore = false }: FundCardProps) {
     return 'text-loss';
   };
 
-  const getRiskBadgeVariant = (risk: string) => {
-    switch (risk) {
-      case 'Low':
-        return 'default';
-      case 'Moderate':
-        return 'secondary';
-      case 'High':
-        return 'destructive';
-      default:
-        return 'outline';
-    }
-  };
-
   return (
     <Card
       className="group glass-card animate-fade-in-up cursor-pointer h-full flex flex-col"
@@ -63,10 +51,17 @@ export function FundCard({ fund, onClick, showScore = false }: FundCardProps) {
             <p className="text-sm text-muted-foreground mt-1">{fund.fundHouse}</p>
           </div>
         </div>
-        <div className="flex gap-2 mt-2">
-          <Badge variant="outline">{fund.category}</Badge>
-          <Badge variant={getRiskBadgeVariant(fund.riskMetrics.risk)}>
-            {fund.riskMetrics.risk}
+        <div className="flex flex-wrap gap-2 mt-2">
+          <Badge variant="outline" className={getCategoryColor(fund.category)}>
+            {fund.category}
+          </Badge>
+          {fund.subCategory && (
+            <Badge variant="outline" className="bg-muted/30">
+              {fund.subCategory}
+            </Badge>
+          )}
+          <Badge variant="outline" className={getRiskColor(fund.riskMetrics.risk)}>
+            Risk: {fund.riskMetrics.risk}
           </Badge>
         </div>
       </CardHeader>

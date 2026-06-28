@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 import {
   User,
   onAuthStateChanged,
@@ -30,12 +32,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(firebaseUser);
 
       if (firebaseUser) {
-        // Check for admin custom claim or specific admin email
-        const tokenResult = await firebaseUser.getIdTokenResult();
-        const hasAdminClaim = !!tokenResult.claims.admin;
         const isHardcodedAdmin = firebaseUser.email === 'rajatsri94@gmail.com';
         
-        setIsAdmin(hasAdminClaim || isHardcodedAdmin);
+        try {
+          const userDocRef = doc(db, 'users', firebaseUser.uid);
+          const userDocSnap = await getDoc(userDocRef);
+          
+          if (userDocSnap.exists()) {
+            const userData = userDocSnap.data();
+            setIsAdmin(isHardcodedAdmin || userData.isAdmin === true);
+            
+            // Update last sign in time
+            await setDoc(userDocRef, { 
+              lastSignIn: serverTimestamp() 
+            }, { merge: true });
+            
+          } else {
+            // First time sign in, create profile
+            await setDoc(userDocRef, {
+              email: firebaseUser.email,
+              displayName: firebaseUser.displayName,
+              photoURL: firebaseUser.photoURL,
+              isAdmin: false,
+              lastSignIn: serverTimestamp(),
+              createdAt: serverTimestamp()
+            });
+            
+            setIsAdmin(isHardcodedAdmin);
+          }
+        } catch (error) {
+          console.error('Failed to manage user profile:', error);
+          setIsAdmin(isHardcodedAdmin);
+        }
       } else {
         setIsAdmin(false);
       }
