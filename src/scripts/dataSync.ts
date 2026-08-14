@@ -15,6 +15,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { executeSync } from '@/services/syncOrchestrator';
 import { saveFundsInBatches } from '@/services/firebaseService';
+import { DATASET_PATH, isFundDataset } from '@/types/dataset';
 
 interface SyncOptions {
   incremental?: boolean;
@@ -100,18 +101,23 @@ async function main() {
   const answer = await askQuestion('\nSelect an option [1/2]: ');
 
   if (answer.trim() === '2') {
+    const datasetPath = path.resolve(process.cwd(), 'public', DATASET_PATH);
     try {
-      console.log('\n📖 Reading local cache...');
-      const cachePath = path.resolve(process.cwd(), 'public/data/funds-cache.json');
-      const cacheData = await fs.readFile(cachePath, 'utf-8');
-      const funds = JSON.parse(cacheData);
-      
-      console.log(`📤 Found ${funds.length} funds. Uploading to Firebase...`);
-      // Pass undefined for progress and signal, and true for isFullSync
-      await saveFundsInBatches(funds, 500, undefined, undefined, true);
+      console.log(`\n📖 Reading ${datasetPath}...`);
+      const raw = JSON.parse(await fs.readFile(datasetPath, 'utf-8')) as unknown;
+
+      if (!isFundDataset(raw)) {
+        throw new Error('File is not a dataset envelope — re-run a full sync to regenerate it');
+      }
+
+      console.log(
+        `📤 Found ${raw.funds.length} funds generated ${raw.generatedAt}. Uploading to Firebase...`,
+      );
+      await saveFundsInBatches(raw.funds, 500, undefined, undefined, true);
       console.log('\n🎉 Upload complete!');
     } catch (error) {
-      console.error('\n❌ Failed to upload local cache. Does public/data/funds-cache.json exist?', error);
+      console.error(`\n❌ Failed to upload ${datasetPath}:`, error);
+      process.exitCode = 1;
     }
   } else {
     // Default to option 1

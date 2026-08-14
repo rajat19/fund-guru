@@ -24,4 +24,6 @@ dist-ssr
 *.sw?
 
 __generated__/
-public/data/funds-cache.json
+
+# public/data/funds.json is deliberately NOT ignored — it is the published
+# dataset the app reads at runtime, so it has to be committed.
