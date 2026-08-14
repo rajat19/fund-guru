@@ -15,7 +15,13 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { MutualFund } from '@/types/mutualFund';
-import { getLocalCache, setLocalCache } from '@/utils/cache';
+import {
+  DATASET_PATH,
+  DATASET_SCHEMA_VERSION,
+  isFundDataset,
+} from '@/types/dataset';
+import { FUNDS_CACHE_KEY, readLocalCache, setLocalCache } from '@/utils/cache';
+import { normalizeFundNumerics } from '@/services/dataProcessor';
 
 const FUNDS_COLLECTION = 'mutual_funds';
 const METADATA_COLLECTION = 'metadata';
@@ -47,8 +53,10 @@ const sanitizeFundData = (data: DocumentData): MutualFund => {
   if (!data.indexReturns) data.indexReturns = {};
   if (!data.sectors) data.sectors = {};
   if (!data.ratings) data.ratings = {};
-  
-  return data as MutualFund;
+
+  // Repairs numeric fields that were stored as strings by earlier syncs, so
+  // stale documents cannot crash the formatters on read.
+  return normalizeFundNumerics(data as MutualFund);
 };
 
 /**
@@ -148,45 +156,116 @@ export const saveFundsInBatches = async (
   }
 };
 
+/** ISO timestamp of the dataset the app is currently showing, if known. */
+let loadedDatasetGeneratedAt: string | null = null;
+
+export const getLoadedDatasetGeneratedAt = (): string | null => loadedDatasetGeneratedAt;
+
+const datasetUrl = () => `${import.meta.env.BASE_URL}${DATASET_PATH}`;
+
+interface LoadedDataset {
+  funds: MutualFund[];
+  generatedAt: string;
+}
+
 /**
- * Get all funds
+ * Fetch the published static dataset. This is the primary source: one
+ * CDN-cached HTTP request instead of ~3,000 Firestore document reads.
+ */
+const fetchStaticDataset = async (): Promise<LoadedDataset | null> => {
+  if (typeof window === 'undefined') return null;
+
+  const url = datasetUrl();
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+
+    const payload: unknown = await response.json();
+    if (!isFundDataset(payload)) {
+      console.warn(`⚠️ ${url} is not a recognised dataset envelope; ignoring`);
+      return null;
+    }
+
+    if (payload.schemaVersion !== DATASET_SCHEMA_VERSION) {
+      console.warn(
+        `⚠️ ${url} has schemaVersion ${payload.schemaVersion}, expected ${DATASET_SCHEMA_VERSION}; ignoring`,
+      );
+      return null;
+    }
+
+    loadedDatasetGeneratedAt = payload.generatedAt;
+    return {
+      funds: payload.funds.map(sanitizeFundData),
+      generatedAt: payload.generatedAt,
+    };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Check in the background whether a newer dataset has been published, and
+ * refresh the cache if so.
+ *
+ * This is what lets the cache TTL be long. Syncs are manual and infrequent, so
+ * expiring on a clock would make visitors re-download an identical file for
+ * nothing; instead the cached entry records which build it holds, and this
+ * compares that against what is being served. The fetch itself is cheap and
+ * usually served from the HTTP cache or answered with a 304.
+ *
+ * Deliberately fire-and-forget: a failure here just means the user keeps
+ * looking at data that was already good enough to show.
+ */
+export const revalidateFunds = async (
+  onUpdate: (funds: MutualFund[]) => void,
+): Promise<void> => {
+  const cached = await readLocalCache<MutualFund[]>(FUNDS_CACHE_KEY);
+  if (!cached.data) return;
+
+  const dataset = await fetchStaticDataset();
+  if (!dataset || dataset.funds.length === 0) return;
+
+  if (cached.version === dataset.generatedAt) return;
+
+  console.log(
+    `🔄 Newer dataset published (${dataset.generatedAt}, cached ${cached.version ?? 'unknown'}) — refreshing`,
+  );
+  await setLocalCache(FUNDS_CACHE_KEY, dataset.funds, dataset.generatedAt);
+  onUpdate(dataset.funds);
+};
+
+/**
+ * Fetch every fund, cheapest source first:
+ *
+ *   1. IndexedDB, if the entry is within its TTL
+ *   2. The published static dataset — one HTTP request
+ *   3. Firestore — one read per fund, so a genuine last resort
  */
 export const getAllFunds = async (): Promise<MutualFund[]> => {
-  // 1. Try Browser IndexedDB Cache FIRST (always the most up-to-date in browser)
-  try {
-    const cachedFunds = await getLocalCache<any[]>('all_mutual_funds');
-    if (cachedFunds && cachedFunds.length > 0) {
-      const funds = cachedFunds.map(sanitizeFundData);
-      console.log(`✅ Retrieved ${funds.length} funds from browser IndexedDB cache`);
-      return funds;
-    }
-  } catch (error) {
-    console.log('⚠️ IndexedDB cache not available...');
+  const cached = await readLocalCache<MutualFund[]>(FUNDS_CACHE_KEY);
+  if (cached.data && cached.data.length > 0) {
+    const ageDays = cached.ageMs != null ? (cached.ageMs / 86_400_000).toFixed(1) : '?';
+    console.log(`✅ ${cached.data.length} funds from browser cache (${ageDays}d old)`);
+    // Surface the age of what we are showing even on the cached path.
+    loadedDatasetGeneratedAt = cached.version ?? loadedDatasetGeneratedAt;
+    return cached.data.map(sanitizeFundData);
+  }
+  if (cached.reason === 'expired' || cached.reason === 'stale-schema') {
+    console.log(`ℹ️ Browser cache discarded: ${cached.reason}`);
   }
 
-  // 2. Try local JSON dev cache SECOND (fallback for local development if IndexedDB is empty)
-  try {
-    if (typeof window !== 'undefined') {
-      const response = await fetch('/data/funds-cache.json');
-      if (response.ok) {
-        const text = await response.text();
-        if (text.trim().startsWith('[')) {
-          const data = JSON.parse(text);
-          const funds = data.map(sanitizeFundData);
-          console.log(`✅ Retrieved ${funds.length} funds from local JSON dev cache`);
-          // Populate IndexedDB for next time
-          await setLocalCache('all_mutual_funds', funds).catch(console.error);
-          return funds;
-        }
-      }
-    }
-  } catch (error) {
-    // Ignore and fallback
+  const dataset = await fetchStaticDataset();
+  if (dataset && dataset.funds.length > 0) {
+    console.log(
+      `✅ Loaded ${dataset.funds.length} funds from static dataset (generated ${dataset.generatedAt})`,
+    );
+    await setLocalCache(FUNDS_CACHE_KEY, dataset.funds, dataset.generatedAt);
+    return dataset.funds;
   }
 
-  // 3. Fallback to Firebase & Save to Cache
   try {
-    console.log('🔍 Fetching all funds from Firebase...');
+    console.log('🔍 Static dataset unavailable — falling back to Firestore...');
     const querySnapshot = await getDocs(collection(db, FUNDS_COLLECTION));
 
     const funds: MutualFund[] = [];
@@ -194,13 +273,12 @@ export const getAllFunds = async (): Promise<MutualFund[]> => {
       funds.push(sanitizeFundData(doc.data()));
     });
 
-    console.log(`✅ Retrieved ${funds.length} funds from Firebase`);
-    
-    // Save to IndexedDB for next time
+    console.log(`✅ Retrieved ${funds.length} funds from Firestore (${funds.length} reads billed)`);
+
     if (funds.length > 0) {
-      await setLocalCache('all_mutual_funds', funds).catch(console.error);
+      await setLocalCache(FUNDS_CACHE_KEY, funds);
     }
-    
+
     return funds;
   } catch (error) {
     console.error('❌ Error fetching funds from Firebase:', error);

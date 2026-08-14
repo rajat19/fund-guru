@@ -6,7 +6,12 @@
 
 import { exportToCSV as generateCSV } from '@/services/dataProcessor';
 import type { MutualFund } from '@/types/mutualFund';
-import { setLocalCache } from '@/utils/cache';
+import {
+  DATASET_PATH,
+  DATASET_SCHEMA_VERSION,
+  type FundDataset,
+} from '@/types/dataset';
+import { FUNDS_CACHE_KEY, setLocalCache } from '@/utils/cache';
 
 export interface ExportOptions {
   filename?: string;
@@ -118,28 +123,46 @@ export const exportToJSON = async (funds: MutualFund[], options: ExportOptions =
 };
 
 /**
- * Update the local development cache file (public/data/funds-cache.json)
+ * Write the published dataset (public/data/funds.json) when running under Node,
+ * or refresh the browser cache when running in a tab.
+ *
+ * The Node branch is the one that matters: that file is what gets committed and
+ * served, and is the app's primary data source.
  */
 export const updateLocalCache = async (funds: MutualFund[]): Promise<void> => {
-  console.log('💾 Updating local API caches...');
+  if (typeof window !== 'undefined') {
+    await setLocalCache(FUNDS_CACHE_KEY, funds);
+    console.log('✅ Browser cache refreshed');
+    return;
+  }
+
+  const dataset: FundDataset = {
+    schemaVersion: DATASET_SCHEMA_VERSION,
+    generatedAt: new Date().toISOString(),
+    count: funds.length,
+    funds,
+  };
+
+  const target = `public/${DATASET_PATH}`;
 
   try {
-    if (typeof window === 'undefined') {
-      const jsonData = JSON.stringify(funds, null, 2);
-      const cachePath = 'public/data/funds-cache.json';
-      const fs = await import('fs/promises');
-      const path = await import('path');
-      
-      const dir = path.dirname(cachePath);
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(cachePath, jsonData);
-      console.log(`✅ Local JSON cache updated successfully`);
-    } else {
-      await setLocalCache('all_mutual_funds', funds);
-      console.log(`✅ Local IndexedDB cache updated successfully`);
-    }
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    // No pretty-printing: this file ships to clients, and indentation roughly
+    // doubles it before gzip.
+    await fs.writeFile(target, JSON.stringify(dataset));
+
+    const { size } = await fs.stat(target);
+    console.log(
+      `✅ Wrote ${target} — ${funds.length} funds, ${(size / 1024 / 1024).toFixed(2)} MB`,
+    );
   } catch (error) {
-    console.error('❌ Failed to update local cache:', error);
+    // A failure here means the app will fall back to Firestore, which works but
+    // costs reads — so make it loud rather than swallowing it.
+    console.error(`❌ Failed to write ${target}:`, error);
+    throw error;
   }
 };
 

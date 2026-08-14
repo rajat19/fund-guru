@@ -1,10 +1,12 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useFundById } from '@/hooks/useMutualFunds';
-import { useScoringConfig } from '@/hooks/useScoringConfig';
-import { calculateFundScore } from '@/utils/scoringEngine';
+import { useFundScores } from '@/hooks/useFundScores';
+import { formatCrore, formatPercent, maxOf } from '@/utils/format';
 import { Badge } from '@/components/ui/badge';
 import { getCategoryColor, getRiskColor } from '@/utils/colors';
 import { FundRecommendations } from '@/components/FundRecommendations';
+import { TaxProfileCard } from '@/components/TaxProfileCard';
+import { RedemptionCalculator } from '@/components/RedemptionCalculator';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft,
@@ -23,13 +25,31 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { Card, CardHeader, CardContent, CardTitle } from '@/components/ui/card';
+import { MutualFund } from '@/types/mutualFund';
+
+/**
+ * Which of 1Y/3Y/5Y was the strongest, ignoring horizons the fund is too young
+ * to have. Returns null when none are populated.
+ */
+function bestReturnPeriod(fund: MutualFund): string {
+  const periods: Array<[string, number | null | undefined]> = [
+    ['1 Year', fund.returns.oneYear],
+    ['3 Years', fund.returns.threeYear],
+    ['5 Years', fund.returns.fiveYear],
+  ];
+
+  const best = maxOf(periods.map(([, value]) => value));
+  if (best == null) return 'N/A';
+
+  return periods.find(([, value]) => value === best)?.[0] ?? 'N/A';
+}
 
 export default function FundDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
 
   const { data: fund, isLoading, error } = useFundById(id || '');
-  const { weights } = useScoringConfig();
+  const { breakdownOf } = useFundScores();
 
   if (isLoading) {
     return (
@@ -76,7 +96,7 @@ export default function FundDetail() {
     );
   }
 
-  const score = calculateFundScore(fund, weights);
+  const breakdown = breakdownOf(fund);
 
   const formatReturn = (value: number | null | undefined) => {
     if (value == null) return 'N/A';
@@ -114,8 +134,10 @@ export default function FundDetail() {
               <p className="text-lg text-muted-foreground">{fund.fundHouse}</p>
             </div>
             <div className="text-right">
-              <div className="text-3xl font-bold text-primary">{score}</div>
-              <div className="text-sm text-muted-foreground">AI Score</div>
+              <div className="text-3xl font-bold text-primary">{breakdown.score.toFixed(1)}</div>
+              <div className="text-sm text-muted-foreground">
+                Peer Score vs {breakdown.peerGroup}
+              </div>
             </div>
           </div>
 
@@ -145,8 +167,8 @@ export default function FundDetail() {
                 </div>
                 <div>
                   <div className="text-sm text-muted-foreground">Risk Level</div>
-                  <Badge variant="outline" className={getRiskColor(fund.riskMetrics.risk)}>
-                    Risk: {fund.riskMetrics.risk}
+                  <Badge variant="outline" className={getRiskColor(fund.riskMetrics.risk ?? '')}>
+                    Risk: {fund.riskMetrics.risk ?? 'Unrated'}
                   </Badge>
                 </div>
               </div>
@@ -284,11 +306,11 @@ export default function FundDetail() {
                         <p>Annual fee charged by the fund, deducted from your returns. <strong>Lower is better</strong> — even 0.5% compounds significantly over time.</p>
                       </TooltipContent>
                     </Tooltip>
-                    <span className="font-semibold">{fund.expenseRatio}%</span>
+                    <span className="font-semibold">{formatPercent(fund.expenseRatio)}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-muted-foreground">Assets Under Management</span>
-                    <span className="font-semibold">₹{(fund.aum / 100).toFixed(0)}K Cr</span>
+                    <span className="font-semibold">{formatCrore(fund.aum)}</span>
                   </div>
                 </div>
               </CardContent>
@@ -304,30 +326,48 @@ export default function FundDetail() {
               <CardContent>
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">AI Score</span>
-                    <span className="font-semibold text-primary">{score}</span>
+                    <span className="text-sm text-muted-foreground">Peer Score</span>
+                    <span className="font-semibold text-primary">
+                      {breakdown.score.toFixed(1)} / 100
+                    </span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Best Return Period</span>
-                    <span className="font-semibold text-profit">
-                      {Math.max(
-                        fund.returns.oneYear,
-                        fund.returns.threeYear,
-                        fund.returns.fiveYear,
-                      ) === fund.returns.oneYear
-                        ? '1 Year'
-                        : Math.max(
-                          fund.returns.oneYear,
-                          fund.returns.threeYear,
-                          fund.returns.fiveYear,
-                        ) === fund.returns.threeYear
-                          ? '3 Years'
-                          : '5 Years'}
+                    <span className="text-sm text-muted-foreground">Compared against</span>
+                    <span className="font-semibold">
+                      {breakdown.peerCount} {breakdown.peerGroup} funds
                     </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Metric coverage</span>
+                    <span className="font-semibold">
+                      {(breakdown.coverage * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  {/*
+                    The score is pulled toward 50 when coverage is low, so
+                    showing the unshrunk number makes the gap explicit rather
+                    than leaving the score looking arbitrary.
+                  */}
+                  {!breakdown.hasSufficientData && (
+                    <div className="text-xs text-amber-600 dark:text-amber-400 border-t border-border pt-3">
+                      Scored on {(breakdown.coverage * 100).toFixed(0)}% of the metrics, so the
+                      score is pulled toward the neutral 50. On the metrics that are available it
+                      would rate {breakdown.measuredScore.toFixed(1)} — but with this little
+                      history that number is not evidence of much. Excluded from ranked lists.
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Best Return Period</span>
+                    <span className="font-semibold text-profit">{bestReturnPeriod(fund)}</span>
                   </div>
                 </div>
               </CardContent>
             </Card>
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <TaxProfileCard fund={fund} />
+            <RedemptionCalculator fund={fund} />
           </div>
 
           <FundRecommendations currentFund={fund} />

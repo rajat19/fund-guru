@@ -29,30 +29,22 @@ export function ScoringConfigSection() {
     );
   }
 
-  const handleChange = (category: keyof ScoringWeights, field: string | null, value: string) => {
-    const numValue = parseFloat(value);
-    if (isNaN(numValue)) return;
+  /** Scalar weights live at the top level; return weights are nested one deep. */
+  type ScalarWeightKey = Exclude<keyof ScoringWeights, 'returns'>;
+  type ReturnWeightKey = keyof ScoringWeights['returns'];
 
-    if (field) {
-      setLocalWeights((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          [category]: {
-            ...(prev[category] as any),
-            [field]: numValue,
-          },
-        };
-      });
-    } else {
-      setLocalWeights((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          [category]: numValue,
-        };
-      });
-    }
+  const handleScalarChange = (key: ScalarWeightKey, value: string) => {
+    const numValue = parseFloat(value);
+    if (Number.isNaN(numValue)) return;
+    setLocalWeights((prev) => (prev ? { ...prev, [key]: numValue } : prev));
+  };
+
+  const handleReturnChange = (key: ReturnWeightKey, value: string) => {
+    const numValue = parseFloat(value);
+    if (Number.isNaN(numValue)) return;
+    setLocalWeights((prev) =>
+      prev ? { ...prev, returns: { ...prev.returns, [key]: numValue } } : prev,
+    );
   };
 
   const handleSave = async () => {
@@ -72,18 +64,22 @@ export function ScoringConfigSection() {
     }
   };
 
-  // Helper to calculate total weights to ensure they sum to roughly 1.0 (100%)
-  const totalBaseWeight = 
-    localWeights.returns.sixMonth + 
-    localWeights.returns.oneYear + 
-    localWeights.returns.threeYear + 
+  // Every metric is a 0-100 percentile, so weights summing to 1.0 make the
+  // score itself a 0-100 number. riskAdjustment is excluded on purpose: it is a
+  // multiplier applied after the weighted sum, not one of the inputs.
+  const totalBaseWeight =
+    localWeights.returns.sixMonth +
+    localWeights.returns.oneYear +
+    localWeights.returns.threeYear +
     localWeights.returns.fiveYear +
     localWeights.expenseRatio +
     localWeights.sharpeRatio +
     localWeights.sortinoRatio +
     localWeights.alpha +
-    localWeights.informationRatio;
-  
+    localWeights.informationRatio +
+    localWeights.categoryOutperformance +
+    localWeights.consistency;
+
   const isBalanced = Math.abs(totalBaseWeight - 1.0) < 0.01;
 
   return (
@@ -91,11 +87,13 @@ export function ScoringConfigSection() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-lg">
           <Settings2 className="h-5 w-5" />
-          AI Scoring Weights
+          Peer Score Weights
         </CardTitle>
         <CardDescription>
-          Adjust the multipliers used to calculate the AI Score for each mutual fund.
-          These take effect immediately across all clients. (Recommended total sum: 1.0)
+          Each metric is scored as a percentile within the fund&apos;s own sub-category, then
+          combined using these weights. Keep the total at 1.00 so the output stays on a 0-100
+          scale — a weight of 0.20 then means that metric is 20% of the score. Changes take
+          effect immediately across all clients.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -110,7 +108,7 @@ export function ScoringConfigSection() {
                   type="number" 
                   step="0.05"
                   value={localWeights.returns.sixMonth} 
-                  onChange={(e) => handleChange('returns', 'sixMonth', e.target.value)} 
+                  onChange={(e) => handleReturnChange('sixMonth', e.target.value)} 
                 />
               </div>
               <div className="space-y-2">
@@ -119,7 +117,7 @@ export function ScoringConfigSection() {
                   type="number" 
                   step="0.05"
                   value={localWeights.returns.oneYear} 
-                  onChange={(e) => handleChange('returns', 'oneYear', e.target.value)} 
+                  onChange={(e) => handleReturnChange('oneYear', e.target.value)} 
                 />
               </div>
               <div className="space-y-2">
@@ -128,7 +126,7 @@ export function ScoringConfigSection() {
                   type="number" 
                   step="0.05"
                   value={localWeights.returns.threeYear} 
-                  onChange={(e) => handleChange('returns', 'threeYear', e.target.value)} 
+                  onChange={(e) => handleReturnChange('threeYear', e.target.value)} 
                 />
               </div>
               <div className="space-y-2">
@@ -137,7 +135,7 @@ export function ScoringConfigSection() {
                   type="number" 
                   step="0.05"
                   value={localWeights.returns.fiveYear} 
-                  onChange={(e) => handleChange('returns', 'fiveYear', e.target.value)} 
+                  onChange={(e) => handleReturnChange('fiveYear', e.target.value)} 
                 />
               </div>
             </div>
@@ -153,7 +151,7 @@ export function ScoringConfigSection() {
                   type="number" 
                   step="0.05"
                   value={localWeights.expenseRatio} 
-                  onChange={(e) => handleChange('expenseRatio', null, e.target.value)} 
+                  onChange={(e) => handleScalarChange('expenseRatio', e.target.value)} 
                 />
               </div>
               <div className="space-y-2">
@@ -162,7 +160,7 @@ export function ScoringConfigSection() {
                   type="number" 
                   step="0.05"
                   value={localWeights.sharpeRatio} 
-                  onChange={(e) => handleChange('sharpeRatio', null, e.target.value)} 
+                  onChange={(e) => handleScalarChange('sharpeRatio', e.target.value)} 
                 />
               </div>
               <div className="space-y-2">
@@ -171,7 +169,7 @@ export function ScoringConfigSection() {
                   type="number" 
                   step="0.05"
                   value={localWeights.sortinoRatio} 
-                  onChange={(e) => handleChange('sortinoRatio', null, e.target.value)} 
+                  onChange={(e) => handleScalarChange('sortinoRatio', e.target.value)} 
                 />
               </div>
               <div className="space-y-2">
@@ -180,7 +178,7 @@ export function ScoringConfigSection() {
                   type="number" 
                   step="0.05"
                   value={localWeights.alpha} 
-                  onChange={(e) => handleChange('alpha', null, e.target.value)} 
+                  onChange={(e) => handleScalarChange('alpha', e.target.value)} 
                 />
               </div>
               <div className="space-y-2">
@@ -189,16 +187,34 @@ export function ScoringConfigSection() {
                   type="number" 
                   step="0.05"
                   value={localWeights.informationRatio} 
-                  onChange={(e) => handleChange('informationRatio', null, e.target.value)} 
+                  onChange={(e) => handleScalarChange('informationRatio', e.target.value)} 
                 />
               </div>
               <div className="space-y-2">
-                <Label>Base Risk Penalty</Label>
-                <Input 
-                  type="number" 
+                <Label>Beat Category</Label>
+                <Input
+                  type="number"
+                  step="0.05"
+                  value={localWeights.categoryOutperformance}
+                  onChange={(e) => handleScalarChange('categoryOutperformance', e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Rank Consistency</Label>
+                <Input
+                  type="number"
+                  step="0.05"
+                  value={localWeights.consistency}
+                  onChange={(e) => handleScalarChange('consistency', e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Risk Tilt (± multiplier)</Label>
+                <Input
+                  type="number"
                   step="0.01"
-                  value={localWeights.riskAdjustment} 
-                  onChange={(e) => handleChange('riskAdjustment', null, e.target.value)} 
+                  value={localWeights.riskAdjustment}
+                  onChange={(e) => handleScalarChange('riskAdjustment', e.target.value)} 
                 />
               </div>
             </div>

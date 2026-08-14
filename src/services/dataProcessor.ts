@@ -1,5 +1,45 @@
 import { GrowwScheme, GrowwSchemeStatsResponse, GrowwSearchResponse } from '../types/api';
 import { MutualFundCategory, RiskLevel, MutualFund } from '@/types/mutualFund';
+import { toNumber, type NumericLike } from '@/utils/number';
+
+/**
+ * Coerce every numeric field on a fund to a real number or null.
+ *
+ * The upstream feed is not type-honest: `expense_ratio` in particular arrives as
+ * a string, and older Firestore documents were written with whatever the feed
+ * gave at the time. Normalising once here means the rest of the app can trust
+ * the declared types instead of every consumer guarding individually.
+ *
+ * Applied on both ingest (processSchemeData) and read (sanitizeFundData), so
+ * historical documents get repaired on the way out too.
+ */
+export function normalizeFundNumerics(fund: MutualFund): MutualFund {
+  const num = (value: NumericLike) => toNumber(value);
+
+  const mapGroup = <T extends Record<string, unknown>>(group: T | undefined): T =>
+    Object.fromEntries(
+      Object.entries(group ?? {}).map(([key, value]) => [key, num(value as NumericLike)]),
+    ) as T;
+
+  return {
+    ...fund,
+    aum: num(fund.aum) ?? undefined,
+    expenseRatio: num(fund.expenseRatio),
+    schemeCode: num(fund.schemeCode) ?? 0,
+    returns: mapGroup(fund.returns),
+    ratios: mapGroup(fund.ratios),
+    rankings: mapGroup(fund.rankings),
+    categoryReturns: mapGroup(fund.categoryReturns),
+    indexReturns: mapGroup(fund.indexReturns),
+    // portfolioMetrics is numeric-only too, but sectors is Record<string, number>
+    // maps and ratings holds crisilRating as a string, so both are left alone.
+    portfolioMetrics: mapGroup(fund.portfolioMetrics),
+    riskMetrics: {
+      ...fund.riskMetrics,
+      riskRating: num(fund.riskMetrics?.riskRating) ?? undefined,
+    },
+  };
+}
 
 export function mapRiskRatingToLevel(riskRating: number): RiskLevel {
   if (riskRating <= 2) return 'Low';
@@ -26,7 +66,7 @@ export const processSchemeData = (
   // Get the first return stats entry that has a valid scheme_code
   const returnStats = searchData?.return_stats?.find((stat) => stat.scheme_code !== null);
 
-  return {
+  return normalizeFundNumerics({
     id: scheme.id,
     schemeName: scheme.scheme_name,
     fundName: scheme.fund_name,
@@ -39,7 +79,7 @@ export const processSchemeData = (
     logoUrl: scheme.logo_url || null,
     
     // Additional fields from search response
-    searchId: scheme.search_id || searchData?.search_id || null,
+    searchId: scheme.search_id || searchData?.search_id || undefined,
     planType: scheme.plan_type || searchData?.plan_type || null,
     schemeType: scheme.scheme_type || searchData?.scheme_type || null,
     exitLoad: searchData?.exit_load || null,
@@ -106,7 +146,7 @@ export const processSchemeData = (
       equitySectors: stats?.equity_sector_per || null,
     },
     lastUpdated: new Date(),
-  };
+  });
 };
 
 export const processAllMutualFunds = async (
@@ -193,7 +233,7 @@ export function exportToCSV(funds: MutualFund[]): string {
     fund.category,
     fund.subCategory,
     fund.schemeCode.toString(),
-    fund.aum.toString(),
+    fund.aum?.toString() ?? '',
     fund.expenseRatio?.toString() || '',
     fund.returns.oneMonth?.toString() || '',
     fund.returns.threeMonth?.toString() || '',
@@ -208,11 +248,11 @@ export function exportToCSV(funds: MutualFund[]): string {
     fund.ratios.beta?.toString() || '',
     fund.ratios.informationRatio?.toString() || '',
     fund.ratios.standardDeviation?.toString() || '',
-    fund.riskMetrics.riskRating.toString(),
-    fund.riskMetrics.risk,
+    fund.riskMetrics.riskRating?.toString() ?? '',
+    fund.riskMetrics.risk ?? '',
     fund.ratings.growwRating?.toString() || '',
     fund.ratings.crisilRating?.toString() || '',
-    fund.lastUpdated.toISOString(),
+    fund.lastUpdated ? new Date(fund.lastUpdated).toISOString() : '',
   ]);
 
   const csvContent = [headers, ...rows]

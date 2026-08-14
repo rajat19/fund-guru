@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,40 +12,68 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
+  group: 'pages'
   cancel-in-progress: false
 
 jobs:
-  build:
+  # Gate the deploy on the checks actually passing. Previously only `build` ran,
+  # so a type error or lint failure could ship.
+  verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+      - uses: actions/checkout@v4
+
+      # Version comes from package.json's packageManager field, so CI and local
+      # cannot drift. Hardcoding 9 here while nothing pinned pnpm locally is what
+      # let corepack pull pnpm 11 and break against the Node pin.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
         with:
-          version: 9
-      
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+          node-version-file: '.nvmrc'
           cache: 'pnpm'
-          
-      - name: Install dependencies
-        run: pnpm install
-        
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test:run
+
+      - name: Verify published dataset is present and parseable
+        run: pnpm verify:dataset
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Version comes from package.json's packageManager field, so CI and local
+      # cannot drift. Hardcoding 9 here while nothing pinned pnpm locally is what
+      # let corepack pull pnpm 11 and break against the Node pin.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
       - name: Build
-        # Assumes your GitHub repo is named "fund-guru"
         run: pnpm build --base=/fund-guru/
-        
-      # Support client-side routing
+
+      # GitHub Pages has no server-side rewrite, so a 404 copy of index.html is
+      # what makes client-side routes work on a hard refresh.
       - name: Copy index.html to 404.html
         run: cp dist/index.html dist/404.html
-        
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
 

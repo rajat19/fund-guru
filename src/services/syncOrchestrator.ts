@@ -9,6 +9,7 @@ import { fetchEnhancedData } from '@/services/dataFetcher';
 import { processSchemes } from '@/services/batchProcessor';
 import { exportToCSV, exportToJSON, updateLocalCache } from '@/services/dataExporter';
 import { saveFundsInBatches } from '@/services/firebaseService';
+import { applyInceptionDates, fetchInceptionDates } from '@/services/inceptionDates';
 import { createProgressCallback } from '@/utils/progressTracker';
 import type { GrowwScheme } from '@/types/api';
 import type { MutualFund } from '@/types/mutualFund';
@@ -126,7 +127,7 @@ const fetchSchemes = async (options: SyncOptions, onProgress?: (msg: string) => 
   console.log('\n📡 Fetching schemes from Groww API...');
   
   if (options.signal?.aborted) throw new Error('Sync cancelled by user');
-  let rawSchemes = await getAllSchemes(options.maxSchemesToFetch, onProgress, options.signal);
+  const rawSchemes = await getAllSchemes(options.maxSchemesToFetch, onProgress, options.signal);
   
   // Deduplicate by scheme.id (Groww API sometimes returns duplicates across pages)
   const uniqueMap = new Map<string, GrowwScheme>();
@@ -192,10 +193,10 @@ const processSchemesWithData = async (
   // Process schemes in batches
   if (options.signal?.aborted) throw new Error('Sync cancelled by user');
   onStepProgress?.('processing', 0, schemes.length, 'Processing and transforming funds...');
-  
+
   const progressCallback = createProgressCallback('Processing', 50);
   const processedFunds = await processSchemes(
-    schemes, 
+    schemes,
     enhancedData,
     {
       batchSize: 100,
@@ -208,7 +209,19 @@ const processSchemesWithData = async (
     }
   );
 
-  return processedFunds;
+  // Enrichment, not a dependency: if this fails the track record falls back to
+  // return-horizon inference, so a failure must not abort an otherwise good sync.
+  if (options.signal?.aborted) throw new Error('Sync cancelled by user');
+  onStepProgress?.('processing', processedFunds.length, processedFunds.length, 'Fetching AMFI inception dates...');
+
+  try {
+    const dates = await fetchInceptionDates(options.signal);
+    return applyInceptionDates(processedFunds, dates).funds;
+  } catch (error) {
+    if (options.signal?.aborted) throw new Error('Sync cancelled by user');
+    console.warn('⚠️ Inception date enrichment failed; continuing without it:', error);
+    return processedFunds;
+  }
 };
 
 /**

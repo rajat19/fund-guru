@@ -2,7 +2,9 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutualFunds, useSyncMutualFunds, MutualFundsFilters } from '@/hooks/useMutualFunds';
 import { useAuth } from '@/hooks/useAuth';
-import { getTopFundsByCategory, getRecommendations } from '@/utils/scoringEngine';
+import { useFundScores } from '@/hooks/useFundScores';
+import { rankFundsWithContext, shortlistFunds } from '@/utils/scoringEngine';
+import { MutualFund, RiskLevel } from '@/types/mutualFund';
 import { FundCard } from './FundCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -21,13 +23,14 @@ import { TrendingUp, Award, Target, PieChart, RefreshCw, Filter, X } from 'lucid
 
 export function Dashboard() {
   const navigate = useNavigate();
-  const [riskTolerance, setRiskTolerance] = useState<'Low' | 'Moderate' | 'High'>('Moderate');
+  const [riskTolerance, setRiskTolerance] = useState<RiskLevel>('Moderate');
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<MutualFundsFilters>({});
-  
+
   const { isAdmin } = useAuth();
 
   const { data: allFunds = [], isLoading, error } = useMutualFunds(filters);
+  const { universe, context, weights } = useFundScores();
   const syncMutation = useSyncMutualFunds();
 
   // Calculate dashboard metrics
@@ -60,10 +63,25 @@ export function Dashboard() {
     };
   }, [allFunds]);
 
-  const topEquityFunds = getTopFundsByCategory(allFunds, 'Equity', 3);
-  const topDebtFunds = getTopFundsByCategory(allFunds, 'Debt', 3);
-  const topHybridFunds = getTopFundsByCategory(allFunds, 'Hybrid', 3);
-  const personalizedRecommendations = getRecommendations(allFunds, riskTolerance);
+  // Ranked against the full universe so category tiles and the shortlist agree.
+  const topByCategory = useMemo(() => {
+    const rankInCategory = (category: MutualFund['category']) =>
+      rankFundsWithContext(
+        universe.filter((fund) => fund.category === category),
+        context,
+      ).slice(0, 3);
+
+    return {
+      Equity: rankInCategory('Equity'),
+      Debt: rankInCategory('Debt'),
+      Hybrid: rankInCategory('Hybrid'),
+    };
+  }, [universe, context]);
+
+  const shortlist = useMemo(
+    () => shortlistFunds(universe, riskTolerance, 5, weights),
+    [universe, riskTolerance, weights],
+  );
 
   const handleFilterChange = (
     key: keyof MutualFundsFilters,
@@ -108,24 +126,24 @@ export function Dashboard() {
         <CardContent className="pt-6">
           <div className="text-center space-y-4">
             <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-foreground">
-              Smart Mutual Fund <span className="text-gradient">Recommendations</span>
+              Mutual Fund <span className="text-gradient">Screener</span>
             </h1>
             <p className="text-lg md:text-xl text-muted-foreground max-w-3xl mx-auto font-medium">
-              Discover top-performing mutual funds with real-time data from leading platforms. Make
-              informed investment decisions based on comprehensive analysis.
+              Rank Indian direct-plan mutual funds against their own sub-category on returns, cost,
+              and risk-adjusted metrics. Screening data, not investment advice.
             </p>
             <div className="flex flex-wrap justify-center gap-6 pt-6">
               <div className="flex items-center gap-2 text-sm">
                 <Award className="h-4 w-4 text-primary" />
-                <span>AI-Powered Rankings</span>
+                <span>Peer-relative scoring</span>
               </div>
               <div className="flex items-center gap-2 text-sm">
                 <Target className="h-4 w-4 text-secondary" />
-                <span>Risk-Adjusted Returns</span>
+                <span>Risk-adjusted metrics</span>
               </div>
               <div className="flex items-center gap-2 text-sm">
                 <PieChart className="h-4 w-4 text-accent" />
-                <span>Real-Time Data</span>
+                <span>Direct plans only</span>
               </div>
             </div>
             <div className="pt-4">
@@ -307,27 +325,34 @@ export function Dashboard() {
         </Card>
       )}
 
-      {/* Personalized Recommendations */}
+      {/* Shortlist filtered by riskometer bucket */}
       <Card>
         <CardHeader>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5 text-primary" />
-              Personalized Recommendations
-            </CardTitle>
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-primary" />
+                Shortlist for your risk band
+              </CardTitle>
+              <p className="text-sm text-muted-foreground mt-1">
+                Highest peer scores among funds whose SEBI riskometer rating sits at or below your
+                selection.
+              </p>
+            </div>
             <div className="flex items-center gap-2">
-              <label className="text-sm font-medium">Risk Tolerance:</label>
+              <label className="text-sm font-medium">Max risk:</label>
               <Select
                 value={riskTolerance}
-                onValueChange={(value: 'Low' | 'Moderate' | 'High') => setRiskTolerance(value)}
+                onValueChange={(value: RiskLevel) => setRiskTolerance(value)}
               >
-                <SelectTrigger className="w-32">
+                <SelectTrigger className="w-36">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="Low">Low</SelectItem>
                   <SelectItem value="Moderate">Moderate</SelectItem>
                   <SelectItem value="High">High</SelectItem>
+                  <SelectItem value="Very High">Very High</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -335,12 +360,12 @@ export function Dashboard() {
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {personalizedRecommendations.slice(0, 3).map((fund) => (
+            {shortlist.slice(0, 3).map((fund) => (
               <div key={fund.id} className="relative">
                 <FundCard fund={fund} showScore={true} />
                 {fund.reason && (
                   <div className="mt-2 text-xs text-muted-foreground p-2 bg-muted/50 rounded">
-                    <strong>Why recommended:</strong> {fund.reason}
+                    <strong>Scored well on:</strong> {fund.reason}
                   </div>
                 )}
               </div>
@@ -361,7 +386,7 @@ export function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {topEquityFunds.map((fund, index) => (
+              {topByCategory.Equity.map((fund, index) => (
                 <div 
                   key={fund.id} 
                   className="border border-border rounded-lg p-3 cursor-pointer hover:border-primary/50 hover:shadow-sm transition-all"
@@ -396,7 +421,7 @@ export function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {topDebtFunds.map((fund, index) => (
+              {topByCategory.Debt.map((fund, index) => (
                 <div 
                   key={fund.id} 
                   className="border border-border rounded-lg p-3 cursor-pointer hover:border-secondary/50 hover:shadow-sm transition-all"
@@ -431,7 +456,7 @@ export function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {topHybridFunds.map((fund, index) => (
+              {topByCategory.Hybrid.map((fund, index) => (
                 <div 
                   key={fund.id} 
                   className="border border-border rounded-lg p-3 cursor-pointer hover:border-accent/50 hover:shadow-sm transition-all"
