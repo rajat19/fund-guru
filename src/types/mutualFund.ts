@@ -18,6 +18,17 @@ export interface MutualFund {
   planType?: string | null;
   schemeType?: string | null;
   exitLoad?: string | null;
+
+  /**
+   * ISO date of the first published NAV, sourced from AMFI records — NOT from
+   * Groww's `launch_date`, which is an ingestion timestamp rather than an
+   * inception date (see utils/trackRecord.ts).
+   *
+   * This is a per-plan date: direct plans only began in January 2013, so an
+   * older scheme's direct plan shows 2013. Use `trackRecordOf()` rather than
+   * this field directly when asking "how much history is there?".
+   */
+  inceptionDate?: string | null;
   
   returns: {
     oneMonth?: number | null;
