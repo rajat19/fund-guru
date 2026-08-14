@@ -1,82 +1,176 @@
-export const getLocalCache = async <T>(key: string): Promise<T | null> => {
-  return new Promise((resolve) => {
-    if (typeof window === 'undefined') return resolve(null);
-    
-    const request = indexedDB.open('FundGuruDB', 1);
-    
-    request.onupgradeneeded = (e) => {
-      const db = (e.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains('cache')) {
-        db.createObjectStore('cache');
+/**
+ * IndexedDB cache for the fund universe.
+ *
+ * Entries carry a written-at timestamp and a schema version. Both matter:
+ *
+ *  - Without a TTL, a browser that loaded the app once would keep serving that
+ *    snapshot forever, which is fatal for an app about current fund data.
+ *  - Without a version, a shape change to MutualFund would be read back as the
+ *    old shape and quietly break rendering.
+ */
+
+const DB_NAME = 'FundGuruDB';
+const DB_VERSION = 1;
+const STORE = 'cache';
+
+/** Bump when the cached payload shape changes. Stale versions are discarded. */
+const SCHEMA_VERSION = 3;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Backstop expiry, not a freshness mechanism.
+ *
+ * Syncs are manual and infrequent, so expiring after a few hours would make
+ * every visitor re-download an identical file for nothing. Correctness comes
+ * from the version check instead: the cache records which dataset build it holds
+ * (`version` below), and a background revalidation replaces it as soon as a new
+ * build is published — see `revalidateFunds` in firebaseService.
+ *
+ * So the TTL only needs to catch the pathological case where revalidation never
+ * succeeds. Seven days is generous for that and costs nothing in the normal path.
+ */
+export const DEFAULT_TTL_MS = 7 * DAY_MS;
+
+export const FUNDS_CACHE_KEY = 'all_mutual_funds';
+
+interface CacheEnvelope<T> {
+  schemaVersion: number;
+  cachedAt: number;
+  /**
+   * Identity of the upstream build this entry came from (for funds, the
+   * dataset's `generatedAt`). Lets a reader tell "same data, just older" from
+   * "actually superseded" without re-downloading the payload.
+   */
+  version?: string;
+  data: T;
+}
+
+const isEnvelope = <T>(value: unknown): value is CacheEnvelope<T> =>
+  typeof value === 'object' &&
+  value !== null &&
+  'schemaVersion' in value &&
+  'cachedAt' in value &&
+  'data' in value;
+
+const openDb = (): Promise<IDBDatabase | null> =>
+  new Promise((resolve) => {
+    if (typeof indexedDB === 'undefined') return resolve(null);
+
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        db.createObjectStore(STORE);
       }
     };
-    
-    request.onsuccess = (e) => {
-      const db = (e.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains('cache')) return resolve(null);
-      
-      const transaction = db.transaction('cache', 'readonly');
-      const store = transaction.objectStore('cache');
-      const getReq = store.get(key);
-      
-      getReq.onsuccess = () => resolve(getReq.result || null);
-      getReq.onerror = () => resolve(null);
-    };
-    
+
+    request.onsuccess = (event) => resolve((event.target as IDBOpenDBRequest).result);
     request.onerror = () => resolve(null);
+    request.onblocked = () => resolve(null);
   });
+
+export interface CacheReadResult<T> {
+  data: T | null;
+  /** Age in ms of what was found, even when it was too old to return. */
+  ageMs: number | null;
+  /** Upstream build identity of the entry, when it recorded one. */
+  version: string | null;
+  reason: 'hit' | 'miss' | 'expired' | 'stale-schema' | 'unavailable';
+}
+
+/**
+ * Reads a cache entry, returning why it missed so callers can log or decide to
+ * fall back. Never rejects — a broken cache is a miss, not an error.
+ */
+export const readLocalCache = async <T>(
+  key: string,
+  ttlMs: number = DEFAULT_TTL_MS,
+): Promise<CacheReadResult<T>> => {
+  const db = await openDb();
+  if (!db || !db.objectStoreNames.contains(STORE)) {
+    return { data: null, ageMs: null, version: null, reason: 'unavailable' };
+  }
+
+  const raw = await new Promise<unknown>((resolve) => {
+    try {
+      const request = db.transaction(STORE, 'readonly').objectStore(STORE).get(key);
+      request.onsuccess = () => resolve(request.result ?? null);
+      request.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+
+  if (raw == null) return { data: null, ageMs: null, version: null, reason: 'miss' };
+
+  // Entries written before envelopes existed are treated as stale rather than
+  // trusted, since we cannot tell how old they are.
+  if (!isEnvelope<T>(raw)) {
+    return { data: null, ageMs: null, version: null, reason: 'stale-schema' };
+  }
+
+  if (raw.schemaVersion !== SCHEMA_VERSION) {
+    return { data: null, ageMs: null, version: null, reason: 'stale-schema' };
+  }
+
+  const version = raw.version ?? null;
+  const ageMs = Date.now() - raw.cachedAt;
+  if (ageMs > ttlMs) return { data: null, ageMs, version, reason: 'expired' };
+
+  return { data: raw.data, ageMs, version, reason: 'hit' };
 };
 
-export const setLocalCache = async (key: string, data: any): Promise<void> => {
-  return new Promise((resolve) => {
-    if (typeof window === 'undefined') return resolve();
-    
-    const request = indexedDB.open('FundGuruDB', 1);
-    
-    request.onupgradeneeded = (e) => {
-      const db = (e.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains('cache')) {
-        db.createObjectStore('cache');
-      }
-    };
-    
-    request.onsuccess = (e) => {
-      const db = (e.target as IDBOpenDBRequest).result;
-      const transaction = db.transaction('cache', 'readwrite');
-      const store = transaction.objectStore('cache');
-      store.put(data, key);
-      
+/** Back-compat convenience: the value if fresh, null otherwise. */
+export const getLocalCache = async <T>(
+  key: string,
+  ttlMs: number = DEFAULT_TTL_MS,
+): Promise<T | null> => (await readLocalCache<T>(key, ttlMs)).data;
+
+export const setLocalCache = async <T>(
+  key: string,
+  data: T,
+  version?: string,
+): Promise<void> => {
+  const db = await openDb();
+  if (!db || !db.objectStoreNames.contains(STORE)) return;
+
+  const envelope: CacheEnvelope<T> = {
+    schemaVersion: SCHEMA_VERSION,
+    cachedAt: Date.now(),
+    version,
+    data,
+  };
+
+  await new Promise<void>((resolve) => {
+    try {
+      const transaction = db.transaction(STORE, 'readwrite');
+      transaction.objectStore(STORE).put(envelope, key);
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => resolve();
-    };
-    
-    request.onerror = () => resolve();
+      transaction.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
   });
 };
 
 export const clearLocalCache = async (key?: string): Promise<void> => {
-  return new Promise((resolve) => {
-    if (typeof window === 'undefined') return resolve();
-    
-    const request = indexedDB.open('FundGuruDB', 1);
-    
-    request.onsuccess = (e) => {
-      const db = (e.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains('cache')) return resolve();
-      
-      const transaction = db.transaction('cache', 'readwrite');
-      const store = transaction.objectStore('cache');
-      
-      if (key) {
-        store.delete(key);
-      } else {
-        store.clear();
-      }
-      
+  const db = await openDb();
+  if (!db || !db.objectStoreNames.contains(STORE)) return;
+
+  await new Promise<void>((resolve) => {
+    try {
+      const transaction = db.transaction(STORE, 'readwrite');
+      const store = transaction.objectStore(STORE);
+      if (key) store.delete(key);
+      else store.clear();
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => resolve();
-    };
-    
-    request.onerror = () => resolve();
+      transaction.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
   });
 };
