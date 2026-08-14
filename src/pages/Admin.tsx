@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
-import { setLocalCache } from '@/utils/cache';
+import { FUNDS_CACHE_KEY, setLocalCache } from '@/utils/cache';
 import { ScoringConfigSection } from '@/components/ScoringConfigSection';
 import {
   AlertDialog,
@@ -199,7 +199,7 @@ export default function Admin() {
       });
 
       // Update the IndexedDB cache with the newly uploaded data so UI updates instantly
-      await setLocalCache('all_mutual_funds', funds);
+      await setLocalCache(FUNDS_CACHE_KEY, funds);
 
       refetchMetadata();
       

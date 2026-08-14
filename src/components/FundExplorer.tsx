@@ -1,8 +1,22 @@
 import { useState, useMemo } from 'react';
-import { useMutualFunds, MutualFundsFilters } from '@/hooks/useMutualFunds';
-import { useScoringConfig } from '@/hooks/useScoringConfig';
-import { calculateFundScore } from '@/utils/scoringEngine';
+import {
+  useMutualFunds,
+  MutualFundsFilters,
+  DEFAULT_MIN_TRACK_RECORD_YEARS,
+} from '@/hooks/useMutualFunds';
+import { TRACK_RECORD_PRESETS } from '@/utils/trackRecord';
+import { useFundScores } from '@/hooks/useFundScores';
 import { getCategoryColor, getRiskColor } from '@/utils/colors';
+import {
+  formatCrore,
+  formatPercent,
+  formatRatio,
+  formatReturn,
+  getReturnColor,
+  maxOf,
+  minOf,
+  sortValue,
+} from '@/utils/format';
 import { FundCard } from './FundCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -37,7 +51,7 @@ import {
 } from 'lucide-react';
 import { MutualFund } from '@/types/mutualFund';
 
-type SortField = 'aiScore' | 'returns' | 'returns3Y' | 'returns5Y' | 'expenseRatio' | 'sharpeRatio' | 'alpha' | 'sortinoRatio' | 'aum' | 'fundName';
+type SortField = 'peerScore' | 'returns' | 'returns3Y' | 'returns5Y' | 'expenseRatio' | 'sharpeRatio' | 'alpha' | 'sortinoRatio' | 'aum' | 'fundName';
 type SortDirection = 'asc' | 'desc';
 
 export function FundExplorer() {
@@ -50,66 +64,67 @@ export function FundExplorer() {
   const [displayLimit, setDisplayLimit] = useState(20);
 
   const { data: allFunds = [], isLoading, error } = useMutualFunds(filters);
-  const { weights } = useScoringConfig();
+  const { scoreOf } = useFundScores();
 
   const fundHouses = useMemo(() => Array.from(new Set(allFunds.map(f => f.fundHouse))).filter(Boolean).sort(), [allFunds]);
   const subCategories = useMemo(() => Array.from(new Set(allFunds.map(f => f.subCategory))).filter(Boolean).sort(), [allFunds]);
 
-  // Sort funds based on selected criteria and limit to top 20
-  const sortedFunds = [...allFunds]
+  // Sort funds based on selected criteria
+  const sortedFunds = useMemo(() => [...allFunds]
     .sort((a, b) => {
       let aValue: number;
       let bValue: number;
 
       switch (sortField) {
-        case 'aiScore':
-          aValue = calculateFundScore(a, weights);
-          bValue = calculateFundScore(b, weights);
+        case 'peerScore':
+          // Precomputed against the full universe, so filtering never moves it.
+          aValue = scoreOf(a);
+          bValue = scoreOf(b);
           break;
         case 'returns':
-          aValue = a.returns?.oneYear || -999;
-          bValue = b.returns?.oneYear || -999;
+          aValue = sortValue(a.returns?.oneYear, sortDirection);
+          bValue = sortValue(b.returns?.oneYear, sortDirection);
           break;
         case 'returns3Y':
-          aValue = a.returns?.threeYear || -999;
-          bValue = b.returns?.threeYear || -999;
+          aValue = sortValue(a.returns?.threeYear, sortDirection);
+          bValue = sortValue(b.returns?.threeYear, sortDirection);
           break;
         case 'returns5Y':
-          aValue = a.returns?.fiveYear || -999;
-          bValue = b.returns?.fiveYear || -999;
+          aValue = sortValue(a.returns?.fiveYear, sortDirection);
+          bValue = sortValue(b.returns?.fiveYear, sortDirection);
           break;
         case 'expenseRatio':
-          aValue = a.expenseRatio || 999;
-          bValue = b.expenseRatio || 999;
+          aValue = sortValue(a.expenseRatio, sortDirection);
+          bValue = sortValue(b.expenseRatio, sortDirection);
           break;
         case 'sharpeRatio':
-          aValue = a.ratios?.sharpeRatio || -999;
-          bValue = b.ratios?.sharpeRatio || -999;
+          aValue = sortValue(a.ratios?.sharpeRatio, sortDirection);
+          bValue = sortValue(b.ratios?.sharpeRatio, sortDirection);
           break;
         case 'alpha':
-          aValue = a.ratios?.alpha || -999;
-          bValue = b.ratios?.alpha || -999;
+          aValue = sortValue(a.ratios?.alpha, sortDirection);
+          bValue = sortValue(b.ratios?.alpha, sortDirection);
           break;
         case 'sortinoRatio':
-          aValue = a.ratios?.sortinoRatio || -999;
-          bValue = b.ratios?.sortinoRatio || -999;
+          aValue = sortValue(a.ratios?.sortinoRatio, sortDirection);
+          bValue = sortValue(b.ratios?.sortinoRatio, sortDirection);
           break;
         case 'aum':
-          aValue = a.aum || 0;
-          bValue = b.aum || 0;
+          aValue = sortValue(a.aum, sortDirection);
+          bValue = sortValue(b.aum, sortDirection);
           break;
         case 'fundName':
           return sortDirection === 'desc'
             ? b.fundName.localeCompare(a.fundName)
             : a.fundName.localeCompare(b.fundName);
         default:
-          aValue = a.returns.oneYear || 0;
-          bValue = b.returns.oneYear || 0;
+          aValue = sortValue(a.returns?.oneYear, sortDirection);
+          bValue = sortValue(b.returns?.oneYear, sortDirection);
       }
 
       return sortDirection === 'desc' ? bValue - aValue : aValue - bValue;
     })
-    .slice(0, displayLimit);
+    .slice(0, displayLimit), [allFunds, sortField, sortDirection, displayLimit, scoreOf]);
 
   const handleFilterChange = (
     key: keyof MutualFundsFilters,
@@ -248,7 +263,7 @@ export function FundExplorer() {
           {/* Sort Options */}
           <div className="flex flex-wrap gap-2">
             <span className="text-sm text-muted-foreground self-center">Sort by:</span>
-            <SortButton field="aiScore">AI Score</SortButton>
+            <SortButton field="peerScore">Peer Score</SortButton>
             <SortButton field="returns">1Y Return</SortButton>
             <SortButton field="returns3Y">3Y Return</SortButton>
             <SortButton field="returns5Y">5Y Return</SortButton>
@@ -337,6 +352,25 @@ export function FundExplorer() {
                 </div>
 
                 <div className="space-y-2">
+                  <label className="text-sm font-medium">Minimum track record</label>
+                  <Select
+                    value={String(filters.minTrackRecordYears ?? DEFAULT_MIN_TRACK_RECORD_YEARS)}
+                    onValueChange={(value) => handleFilterChange('minTrackRecordYears', Number(value))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TRACK_RECORD_PRESETS.map((preset) => (
+                        <SelectItem key={preset.years} value={String(preset.years)}>
+                          {preset.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
                   <label className="text-sm font-medium">Min 1Y Return (%)</label>
                   <Input type="number" placeholder="0" value={filters.minReturn || ''} onChange={(e) => handleFilterChange('minReturn', e.target.value ? Number(e.target.value) : undefined)} />
                 </div>
@@ -399,7 +433,7 @@ export function FundExplorer() {
                 </p>
                 {allFunds.length > displayLimit && (
                   <p className="text-xs text-muted-foreground">
-                    Sorted by {sortField === 'aiScore' ? 'AI Score' :
+                    Sorted by {sortField === 'peerScore' ? 'Peer Score' :
                               sortField === 'returns' ? '1Y Returns' : 
                               sortField === 'returns3Y' ? '3Y Returns' :
                               sortField === 'returns5Y' ? '5Y Returns' :
@@ -475,24 +509,19 @@ export function FundExplorer() {
                     <div>
                       <span className="font-medium">Best 1Y Return:</span>
                       <p className="text-green-600 font-medium">
-                        {selectedFundObjects.length > 0 &&
-                          Math.max(...selectedFundObjects.map((f) => f.returns.oneYear)).toFixed(1)}
-                        %
+                        {formatReturn(maxOf(selectedFundObjects.map((f) => f.returns.oneYear)), 1)}
                       </p>
                     </div>
                     <div>
                       <span className="font-medium">Lowest Expense:</span>
                       <p className="text-blue-600 font-medium">
-                        {selectedFundObjects.length > 0 &&
-                          Math.min(...selectedFundObjects.map((f) => f.expenseRatio)).toFixed(2)}
-                        %
+                        {formatPercent(minOf(selectedFundObjects.map((f) => f.expenseRatio)))}
                       </p>
                     </div>
                     <div>
                       <span className="font-medium">Highest Sharpe:</span>
                       <p className="text-purple-600 font-medium">
-                        {selectedFundObjects.length > 0 &&
-                          Math.max(...selectedFundObjects.map((f) => f.ratios.sharpeRatio)).toFixed(2)}
+                        {formatRatio(maxOf(selectedFundObjects.map((f) => f.ratios.sharpeRatio)))}
                       </p>
                     </div>
                   </div>
@@ -507,6 +536,62 @@ export function FundExplorer() {
 }
 
 // Fund comparison component for detailed analysis
+interface Leader {
+  label: string;
+  className: string;
+  display: string;
+  fundName: string;
+}
+
+/**
+ * "Best on each metric" tiles for the comparison view. Every metric here is
+ * optional in the feed, so a tile can legitimately have no winner at all.
+ */
+function leadersFor(funds: MutualFund[]): Leader[] {
+  const specs = [
+    {
+      label: 'Highest 1Y Return',
+      className: 'text-green-600',
+      pick: (f: MutualFund) => f.returns.oneYear,
+      best: maxOf,
+      display: (v: number) => formatReturn(v, 1),
+    },
+    {
+      label: 'Lowest Expense',
+      className: 'text-blue-600',
+      pick: (f: MutualFund) => f.expenseRatio,
+      best: minOf,
+      display: (v: number) => formatPercent(v),
+    },
+    {
+      label: 'Best Sharpe Ratio',
+      className: 'text-purple-600',
+      pick: (f: MutualFund) => f.ratios.sharpeRatio,
+      best: maxOf,
+      display: (v: number) => formatRatio(v),
+    },
+    {
+      label: 'Largest AUM',
+      className: 'text-indigo-600',
+      pick: (f: MutualFund) => f.aum,
+      best: maxOf,
+      display: (v: number) => formatCrore(v),
+    },
+  ];
+
+  return specs.map(({ label, className, pick, best, display }) => {
+    const winning = best(funds.map(pick));
+    const winner = winning == null ? undefined : funds.find((f) => pick(f) === winning);
+
+    return {
+      label,
+      className,
+      display: winning == null ? 'N/A' : display(winning),
+      fundName: winner ? winner.schemeName.split(' ').slice(0, 2).join(' ') : '—',
+    };
+  });
+}
+
 function FundComparison({ funds }: { funds: MutualFund[] }) {
   if (funds.length === 0) {
     return <div className="text-center py-8">No funds selected for comparison.</div>;
@@ -561,9 +646,9 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
                 <td key={fund.id} className="p-3">
                   <Badge
                     variant="outline"
-                    className={getRiskColor(fund.riskMetrics.risk)}
+                    className={getRiskColor(fund.riskMetrics.risk ?? '')}
                   >
-                    Risk: {fund.riskMetrics.risk}
+                    Risk: {fund.riskMetrics.risk ?? 'Unrated'}
                   </Badge>
                 </td>
               ))}
@@ -674,79 +759,17 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
         </h3>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="p-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-green-600">
-                  {Math.max(...funds.map((f) => f.returns.oneYear)).toFixed(1)}%
+          {leadersFor(funds).map((leader) => (
+            <Card key={leader.label}>
+              <CardContent className="p-4">
+                <div className="text-center">
+                  <div className={`text-2xl font-bold ${leader.className}`}>{leader.display}</div>
+                  <div className="text-sm text-muted-foreground">{leader.label}</div>
+                  <div className="text-xs mt-1">{leader.fundName}</div>
                 </div>
-                <div className="text-sm text-muted-foreground">Highest 1Y Return</div>
-                <div className="text-xs mt-1">
-                  {funds
-                    .find(
-                      (f) => f.returns.oneYear === Math.max(...funds.map((f) => f.returns.oneYear)),
-                    )
-                    ?.schemeName.split(' ')
-                    .slice(0, 2)
-                    .join(' ')}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-blue-600">
-                  {Math.min(...funds.map((f) => f.expenseRatio)).toFixed(2)}%
-                </div>
-                <div className="text-sm text-muted-foreground">Lowest Expense</div>
-                <div className="text-xs mt-1">
-                  {funds
-                    .find((f) => f.expenseRatio === Math.min(...funds.map((f) => f.expenseRatio)))
-                    ?.schemeName.split(' ')
-                    .slice(0, 2)
-                    .join(' ')}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-purple-600">
-                  {Math.max(...funds.map((f) => f.ratios.sharpeRatio)).toFixed(2)}
-                </div>
-                <div className="text-sm text-muted-foreground">Best Sharpe Ratio</div>
-                <div className="text-xs mt-1">
-                  {funds
-                    .find((f) => f.ratios.sharpeRatio === Math.max(...funds.map((f) => f.ratios.sharpeRatio)))
-                    ?.schemeName.split(' ')
-                    .slice(0, 2)
-                    .join(' ')}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-indigo-600">
-                  ₹{Math.max(...funds.map((f) => f.aum)).toLocaleString()}Cr
-                </div>
-                <div className="text-sm text-muted-foreground">Largest AUM</div>
-                <div className="text-xs mt-1">
-                  {funds
-                    .find((f) => f.aum === Math.max(...funds.map((f) => f.aum)))
-                    ?.schemeName.split(' ')
-                    .slice(0, 2)
-                    .join(' ')}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          ))}
         </div>
       </div>
     </div>

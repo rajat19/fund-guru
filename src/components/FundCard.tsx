@@ -1,41 +1,29 @@
 import { MutualFund } from '@/types/mutualFund';
-import { calculateFundScore } from '@/utils/scoringEngine';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { TrendingUp, TrendingDown, Shield, DollarSign, Sparkles } from 'lucide-react';
+import { Shield, DollarSign, Sparkles, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useMemo } from 'react';
-import { useScoringConfig } from '@/hooks/useScoringConfig';
+import { useFundScores } from '@/hooks/useFundScores';
+import type { ScoreBreakdown } from '@/utils/scoringEngine';
 import { getCategoryColor, getRiskColor } from '@/utils/colors';
+import { formatPercent, formatRatio, formatReturn, getReturnColor } from '@/utils/format';
+import { describeTrackRecord, trackRecordOf } from '@/utils/trackRecord';
 
 interface FundCardProps {
-  fund: MutualFund & { score?: number; rank?: number };
+  fund: MutualFund & { score?: number; rank?: number; breakdown?: ScoreBreakdown };
   onClick?: (fund: MutualFund) => void;
   showScore?: boolean;
 }
 
-export function FundCard({ fund, onClick, showScore = false }: FundCardProps) {
+export function FundCard({ fund, showScore = false }: FundCardProps) {
   const navigate = useNavigate();
-  const { weights } = useScoringConfig();
+  const { breakdownOf } = useFundScores();
 
-  const aiScore = useMemo(() => {
-    if (fund.score != null) return fund.score;
-    if (showScore) return calculateFundScore(fund, weights);
-    return null;
-  }, [fund, showScore, weights]);
-
-  const formatReturn = (value: number | null) => {
-    if (value === null) return 'N/A';
-    return value > 0 ? `+${value.toFixed(2)}%` : `${value.toFixed(2)}%`;
-  };
-
-  const getReturnColor = (value: number | null) => {
-    if (value === null) return 'text-muted-foreground';
-    if (value > 15) return 'text-profit';
-    if (value > 8) return 'text-secondary';
-    if (value > 0) return 'text-muted-foreground';
-    return 'text-loss';
-  };
+  // Prefer a breakdown handed down from a ranked list; only fall back to the
+  // shared scoring context when this card is rendered standalone.
+  const breakdown = fund.breakdown ?? (showScore || fund.score != null ? breakdownOf(fund) : null);
+  const peerScore = fund.score ?? breakdown?.score ?? null;
+  const track = breakdown?.trackRecord ?? trackRecordOf(fund);
 
   return (
     <Card
@@ -60,8 +48,18 @@ export function FundCard({ fund, onClick, showScore = false }: FundCardProps) {
               {fund.subCategory}
             </Badge>
           )}
-          <Badge variant="outline" className={getRiskColor(fund.riskMetrics.risk)}>
-            Risk: {fund.riskMetrics.risk}
+          <Badge variant="outline" className={getRiskColor(fund.riskMetrics.risk ?? '')}>
+            Risk: {fund.riskMetrics.risk ?? 'Unrated'}
+          </Badge>
+          <Badge
+            variant="outline"
+            className={
+              track.isNew
+                ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+                : 'bg-muted/30'
+            }
+          >
+            {describeTrackRecord(track)}
           </Badge>
         </div>
       </CardHeader>
@@ -95,30 +93,50 @@ export function FundCard({ fund, onClick, showScore = false }: FundCardProps) {
             <DollarSign className="h-4 w-4 text-muted-foreground" />
             <div>
               <div className="text-xs text-muted-foreground">Expense Ratio</div>
-              <div className="font-semibold">
-                {fund.expenseRatio ? fund.expenseRatio : 'N/A'}%
-              </div>
+              <div className="font-semibold">{formatPercent(fund.expenseRatio)}</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Shield className="h-4 w-4 text-muted-foreground" />
             <div>
               <div className="text-xs text-muted-foreground">Sharpe Ratio</div>
-              <div className="font-semibold">
-                {fund.ratios.sharpeRatio ? fund.ratios.sharpeRatio.toFixed(2) : 'N/A'}
-              </div>
+              <div className="font-semibold">{formatRatio(fund.ratios.sharpeRatio)}</div>
             </div>
           </div>
         </div>
 
-        {/* AI Score */}
-        {aiScore != null && (
-          <div className="flex justify-between items-center pt-2 border-t border-border mt-auto">
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="h-4 w-4 text-primary" />
-              <span className="text-sm font-medium text-muted-foreground">AI Score</span>
+        {/* Peer score: percentile-weighted position within this fund's own sub-category */}
+        {peerScore != null && (
+          <div className="pt-2 border-t border-border mt-auto space-y-1">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-1.5">
+                <Sparkles className="h-4 w-4 text-primary" />
+                <span className="text-sm font-medium text-muted-foreground">Peer Score</span>
+              </div>
+              <span
+                className={`text-lg font-bold ${
+                  breakdown && !breakdown.hasSufficientData
+                    ? 'text-muted-foreground'
+                    : 'text-primary'
+                }`}
+              >
+                {peerScore.toFixed(1)}
+              </span>
             </div>
-            <span className="text-lg font-bold text-primary">{aiScore}</span>
+
+            {/*
+              Without this, a fund scored on one metric is indistinguishable from
+              one scored on eleven — which is exactly how brand-new FoFs ended up
+              looking like top picks.
+            */}
+            {breakdown && !breakdown.hasSufficientData && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="h-3 w-3 shrink-0" />
+                <span>
+                  Limited data — {Math.round(breakdown.coverage * 100)}% of metrics available
+                </span>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

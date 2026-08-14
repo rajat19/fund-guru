@@ -19,8 +19,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { useMutualFunds } from '@/hooks/useMutualFunds';
-import { calculateFundScore } from '@/utils/scoringEngine';
-import { useScoringConfig } from '@/hooks/useScoringConfig';
+import { useFundScores } from '@/hooks/useFundScores';
 import {
   PiggyBank,
   Plus,
@@ -45,7 +44,7 @@ interface SIP {
 export function SIPTracker() {
   const { toast } = useToast();
   const { data: allFunds = [], isLoading: fundsLoading } = useMutualFunds();
-  const { weights } = useScoringConfig();
+  const { scoreOf } = useFundScores();
   const [sips, setSips] = useState<SIP[]>([
     {
       id: 'SIP001',
@@ -96,7 +95,7 @@ export function SIPTracker() {
 
     const totalInvested = parseInt(newSip.monthlyAmount) * monthsInvested;
     const currentValue =
-      totalInvested * (1 + (selectedFund.returns.oneYear / 100 / 12) * monthsInvested);
+      totalInvested * (1 + ((selectedFund.returns.oneYear ?? 0) / 100 / 12) * monthsInvested);
 
     const newSipEntry: SIP = {
       id: `SIP${Date.now()}`,
@@ -135,7 +134,7 @@ export function SIPTracker() {
         const fund = allFunds.find((f) => f.id === sip.fundId);
         if (!fund) return null;
 
-        const score = calculateFundScore(fund, weights);
+        const score = scoreOf(fund);
         const performance = ((sip.currentValue - sip.totalInvested) / sip.totalInvested) * 100;
 
         let recommendation: 'continue' | 'pause' | 'stop' = 'continue';
@@ -164,7 +163,7 @@ export function SIPTracker() {
           reason,
         };
       })
-      .filter(Boolean);
+      .filter((rec): rec is NonNullable<typeof rec> => rec !== null);
 
     return recommendations;
   };
