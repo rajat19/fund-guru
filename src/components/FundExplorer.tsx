@@ -49,6 +49,10 @@ import {
   SortDesc,
   GitCompare,
 } from 'lucide-react';
+import { schemeLabel } from '@/utils/schemeName';
+import { metricInfoFor } from '@/utils/metricInfo';
+import { DirectionHint, MetricInfoTip } from '@/components/MetricInfoTip';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { MutualFund } from '@/types/mutualFund';
 
 type SortField = 'peerScore' | 'returns' | 'returns3Y' | 'returns5Y' | 'expenseRatio' | 'sharpeRatio' | 'alpha' | 'sortinoRatio' | 'aum' | 'fundName';
@@ -538,9 +542,12 @@ export function FundExplorer() {
 // Fund comparison component for detailed analysis
 interface Leader {
   label: string;
+  metricKey: string;
   className: string;
   display: string;
-  fundName: string;
+  house: string;
+  scheme: string;
+  full: string;
 }
 
 /**
@@ -551,6 +558,7 @@ function leadersFor(funds: MutualFund[]): Leader[] {
   const specs = [
     {
       label: 'Highest 1Y Return',
+      metricKey: 'oneYear',
       className: 'text-green-600',
       pick: (f: MutualFund) => f.returns.oneYear,
       best: maxOf,
@@ -558,6 +566,7 @@ function leadersFor(funds: MutualFund[]): Leader[] {
     },
     {
       label: 'Lowest Expense',
+      metricKey: 'expenseRatio',
       className: 'text-blue-600',
       pick: (f: MutualFund) => f.expenseRatio,
       best: minOf,
@@ -565,6 +574,7 @@ function leadersFor(funds: MutualFund[]): Leader[] {
     },
     {
       label: 'Best Sharpe Ratio',
+      metricKey: 'sharpeRatio',
       className: 'text-purple-600',
       pick: (f: MutualFund) => f.ratios.sharpeRatio,
       best: maxOf,
@@ -572,6 +582,7 @@ function leadersFor(funds: MutualFund[]): Leader[] {
     },
     {
       label: 'Largest AUM',
+      metricKey: 'aum',
       className: 'text-indigo-600',
       pick: (f: MutualFund) => f.aum,
       best: maxOf,
@@ -579,15 +590,19 @@ function leadersFor(funds: MutualFund[]): Leader[] {
     },
   ];
 
-  return specs.map(({ label, className, pick, best, display }) => {
+  return specs.map(({ label, metricKey, className, pick, best, display }) => {
     const winning = best(funds.map(pick));
     const winner = winning == null ? undefined : funds.find((f) => pick(f) === winning);
+    const named = winner ? schemeLabel(winner) : null;
 
     return {
       label,
+      metricKey,
       className,
       display: winning == null ? 'N/A' : display(winning),
-      fundName: winner ? winner.schemeName.split(' ').slice(0, 2).join(' ') : '—',
+      house: named?.house ?? '',
+      scheme: named?.scheme ?? '—',
+      full: named?.full ?? '',
     };
   });
 }
@@ -596,6 +611,7 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
   if (funds.length === 0) {
     return <div className="text-center py-8">No funds selected for comparison.</div>;
   }
+
 
   const metrics = [
     { key: 'oneYear', label: '1 Year Return', suffix: '%', color: 'text-green-600' },
@@ -616,6 +632,7 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
   ];
 
   return (
+    <TooltipProvider>
     <div className="space-y-6">
       {/* Basic Information */}
       <div className="overflow-x-auto">
@@ -679,12 +696,22 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
             <thead>
               <tr className="border-b">
                 <th className="text-left p-3 font-semibold">Metrics</th>
-                {funds.map((fund) => (
-                  <th key={fund.id} className="text-center p-3 font-medium text-sm">
-                    {fund.schemeName.split(' ').slice(0, 2).join(' ')}
-                  </th>
-                ))}
-                <th className="text-center p-3 font-medium text-sm">Best</th>
+                {funds.map((fund) => {
+                  const label = schemeLabel(fund);
+                  return (
+                    <th
+                      key={fund.id}
+                      className="p-3 font-medium text-sm align-bottom min-w-[9rem] max-w-[12rem]"
+                      title={label.full}
+                    >
+                      <div className="text-xs text-muted-foreground font-normal truncate">
+                        {label.house}
+                      </div>
+                      <div className="leading-snug">{label.scheme}</div>
+                    </th>
+                  );
+                })}
+                <th className="text-center p-3 font-medium text-sm align-bottom">Best</th>
               </tr>
             </thead>
             <tbody>
@@ -702,8 +729,11 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
                 });
 
                 const numericValues = values.filter((v): v is number => v !== null);
+                // Metrics with no better direction (beta, AUM) get no winner —
+                // crowning one would assert something untrue.
+                const hasWinner = metricInfoFor(metric.key)?.direction !== 'depends';
                 const bestValue =
-                  numericValues.length > 0
+                  hasWinner && numericValues.length > 0
                     ? metric.lower
                       ? Math.min(...numericValues)
                       : Math.max(...numericValues)
@@ -711,7 +741,13 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
 
                 return (
                   <tr key={metric.key} className="border-b hover:bg-muted/50">
-                    <td className="p-3 font-medium">{metric.label}</td>
+                    <td className="p-3 font-medium">
+                      <span className="inline-flex items-center gap-1.5">
+                        {metric.label}
+                        <DirectionHint metricKey={metric.key} />
+                        <MetricInfoTip metricKey={metric.key} />
+                      </span>
+                    </td>
                     {funds.map((fund, index) => {
                       const value = values[index];
                       const isNumerical = typeof value === 'number';
@@ -764,8 +800,15 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
               <CardContent className="p-4">
                 <div className="text-center">
                   <div className={`text-2xl font-bold ${leader.className}`}>{leader.display}</div>
-                  <div className="text-sm text-muted-foreground">{leader.label}</div>
-                  <div className="text-xs mt-1">{leader.fundName}</div>
+                  <div className="text-sm text-muted-foreground inline-flex items-center gap-1.5">
+                    {leader.label}
+                    <MetricInfoTip metricKey={leader.metricKey} />
+                  </div>
+                  {/* Full name in the title, since the tile is too narrow for it. */}
+                  <div className="text-xs mt-1 leading-snug" title={leader.full}>
+                    <div className="font-medium">{leader.scheme}</div>
+                    {leader.house && <div className="text-muted-foreground">{leader.house}</div>}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -773,5 +816,6 @@ function FundComparison({ funds }: { funds: MutualFund[] }) {
         </div>
       </div>
     </div>
+    </TooltipProvider>
   );
 }
