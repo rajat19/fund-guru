@@ -2,51 +2,67 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Check if user is an admin by verifying email OR checking if their user document has isAdmin: true
+
+    // Admin check. The email allowlist is the bootstrap path (the first admin
+    // has no user document yet); the isAdmin flag covers everyone after that.
     function isAdmin() {
       return request.auth != null && (
         request.auth.token.email == 'rajatsri94@gmail.com' ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+        )
       );
     }
-    
-    // Mutual funds data — public read, admin-only write
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Fund data.
+    //
+    // Reads require sign-in. Anonymous visitors are served the published static
+    // dataset (public/data/funds.json) instead, which costs nothing; this
+    // collection is only the fallback. Leaving it world-readable let anyone
+    // enumerate ~3,000 documents and drain the daily read quota, since a full
+    // collection scan bills one read per document.
     match /mutual_funds/{fundId} {
-      allow read: if true;
+      allow read: if isSignedIn();
       allow write: if isAdmin();
     }
-    
-    // Sync metadata — public read, admin-only write
+
+    // Single documents, cheap to read, needed before sign-in.
     match /metadata/{docId} {
       allow read: if true;
       allow write: if isAdmin();
     }
-    
-    // App configuration — public read, admin-only write
+
     match /app_config/{docId} {
       allow read: if true;
       allow write: if isAdmin();
     }
-    
-    // User profiles — strict security to prevent privilege escalation
+
+    // User profiles — strict, to prevent privilege escalation.
     match /users/{userId} {
-      // Users can read their own profile; Admins can read all profiles
-      allow read: if (request.auth != null && request.auth.uid == userId) || isAdmin();
-      
-      // Users can create their own profile, but MUST set isAdmin to false
-      // Admins can create profiles with any data
-      allow create: if (request.auth != null && request.auth.uid == userId && request.resource.data.isAdmin == false) || isAdmin();
-                    
-      // Users can update their own profile, but CANNOT modify their isAdmin field
-      // Admins can update profiles with any data
-      allow update: if (request.auth != null && request.auth.uid == userId && request.resource.data.isAdmin == resource.data.isAdmin) || isAdmin();
-      
-      // Only admins can delete profiles
+      allow read: if (isSignedIn() && request.auth.uid == userId) || isAdmin();
+
+      // A user may create their own profile but cannot self-grant admin.
+      allow create: if (isSignedIn() && request.auth.uid == userId
+                        && request.resource.data.isAdmin == false) || isAdmin();
+
+      // A user may update their own profile but cannot change isAdmin.
+      allow update: if (isSignedIn() && request.auth.uid == userId
+                        && request.resource.data.isAdmin == resource.data.isAdmin) || isAdmin();
+
       allow delete: if isAdmin();
     }
-    
-    // Default deny
+
+    // Per-user private data (SIPs, goals, holdings). Owner-only, no admin
+    // read — there is no reason for an admin to see someone's portfolio.
+    match /users/{userId}/{collection}/{docId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
