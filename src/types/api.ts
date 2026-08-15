@@ -82,9 +82,34 @@ export interface GrowwSearchResponse {
   // Financial metrics
   nav: number | null;
   aum: number | null;
+  // Declared as number but the feed sends numeric strings for some of these,
+  // which is why everything downstream goes through toNumber().
   expense_ratio: number | null;
   exit_load: string | null;
   face_value: number | null;
+
+  /** Scheme minimums. Constrain how finely a portfolio can be split. */
+  min_investment_amount: number | null;
+  min_sip_investment: number | null;
+
+  /** All-null for schemes without a lock-in; populated for ELSS. */
+  lock_in: { years: number | null; months: number | null; days: number | null } | null;
+
+  benchmark_name: string | null;
+
+  /**
+   * Stock-level portfolio. Present on this endpoint (which the sync already
+   * calls) even though the portfolio/stats endpoint only exposes concentration
+   * percentages. `corpus_per` sums to 100 across the array.
+   */
+  holdings: Array<{
+    company_name: string;
+    stock_search_id: string | null;
+    sector_name: string | null;
+    nature_name: string | null;
+    corpus_per: number | null;
+    portfolio_date: string | null;
+  }> | null;
 
   // Ratings and risk
   groww_rating: number | null;
