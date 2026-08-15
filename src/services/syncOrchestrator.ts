@@ -262,7 +262,12 @@ const saveToFirebase = async (
   onSaveProgress?: (saved: number, total: number) => void,
 ): Promise<number> => {
   if (options.skipFirebase) {
-    console.log('\n⏭️  Skipping Firebase save');
+    // Phrased as a normal outcome, not a failure: this is the default path now,
+    // and the published static files are what the app actually reads.
+    console.log(
+      '\n⏭️  Firestore not written (default). The app serves the static files just written.' +
+        '\n    Pass --firebase, or run `pnpm sync:data:firebase`, to refresh the Firestore fallback.',
+    );
     return 0;
   }
 

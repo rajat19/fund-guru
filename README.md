@@ -245,6 +245,8 @@ dataset → Firestore.
 Sync runs **only on your machine**. It cannot run in the browser in production (Groww's API sends no
 CORS headers) and it is deliberately not in CI (no credentials there).
 
+It writes two files and, by default, **does not touch Firestore**:
+
 ```bash
 pnpm sync:data
 ```
@@ -258,6 +260,25 @@ git add public/data/funds.json && git commit -m "chore: refresh fund data" && gi
 `pnpm verify:dataset` runs in CI and fails the build if the file is missing, malformed,
 schema-mismatched, or older than 45 days — so a silent fallback to Firestore becomes a red build
 instead of a surprise bill.
+
+### Why the sync no longer writes Firestore by default
+
+It used to, costing ~1,541 reads (the stale-doc sweep scans the whole collection) plus ~1,541 writes
+on every sync, and it was the only reason the sync needed Firebase credentials.
+
+That fallback is close to unreachable now: CI refuses to ship a build whose `funds.json` is missing or
+malformed, and Firestore reads require sign-in, so an anonymous visitor never gets there. It is also
+only a *partial* fallback — `holdings.json` has no Firestore mirror, so a visitor who fell back would
+lose overlap analysis regardless.
+
+So it is opt-in:
+
+```bash
+pnpm sync:data:firebase
+```
+
+Worth running if you want the fallback warm before a risky deploy, or if something other than this app
+ever needs to read the data server-side. Otherwise skip it.
 
 Other sync modes:
 
@@ -274,8 +295,8 @@ Running `pnpm sync:data` with no arguments also offers a second option: upload t
 
 ## Who can change what
 
-- **Writing fund data** requires a Firestore admin (email allowlist or `isAdmin: true`), and in
-  practice only happens from a local sync — see [`firestore.rules`](firestore.rules).
+- **Writing fund data** requires a Firestore admin (email allowlist or `isAdmin: true`), and only
+  happens when you explicitly run `pnpm sync:data:firebase` — see [`firestore.rules`](firestore.rules).
 - **Reading fund data from Firestore** requires sign-in. Anonymous visitors get the static dataset
   instead. A world-readable collection let anyone enumerate every document and drain the read quota.
 - **Deploying** needs push access to `main`. The deploy workflow holds no Firebase credentials.
