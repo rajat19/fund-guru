@@ -1,4 +1,4 @@
-import { User, PlusCircle, Briefcase, Target, BarChart3, Home, TrendingUp, Shield } from 'lucide-react';
+import { User, PlusCircle, Briefcase, Target, BarChart3, Home, TrendingUp, Shield, Wand2 } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -17,6 +17,7 @@ import {
 const mainItems = [
   { title: 'Dashboard', url: '/', icon: Home },
   { title: 'Fund Explorer', url: '/explorer', icon: TrendingUp },
+  { title: 'Investment Builder', url: '/builder', icon: Wand2 },
 ];
 
 const investmentItems = [

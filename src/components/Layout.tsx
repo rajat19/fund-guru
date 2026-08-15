@@ -19,6 +19,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 const getPageTitle = (pathname: string) => {
   if (pathname === '/') return 'Dashboard';
   if (pathname === '/explorer') return 'Fund Explorer';
+  if (pathname === '/builder') return 'Investment Builder';
   if (pathname === '/sip') return 'SIP Tracker';
   if (pathname === '/portfolio') return 'Portfolio';
   if (pathname === '/goals') return 'Goals';
