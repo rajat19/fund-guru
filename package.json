@@ -22,6 +22,7 @@
     "format:check": "prettier --check .",
     "check": "pnpm typecheck && pnpm lint && pnpm test:run",
     "sync:data": "tsx src/scripts/dataSync.ts",
+    "sync:data:firebase": "tsx src/scripts/dataSync.ts --firebase",
     "sync:data:incremental": "tsx src/scripts/dataSync.ts --incremental",
     "sync:data:sample": "tsx src/scripts/dataSync.ts --max-schemes 100 --csv",
     "sync:data:offline": "tsx src/scripts/dataSync.ts --skip-firebase",

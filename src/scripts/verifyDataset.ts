@@ -12,6 +12,11 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { DATASET_PATH, DATASET_SCHEMA_VERSION, isFundDataset } from '@/types/dataset';
+import {
+  HOLDINGS_PATH,
+  HOLDINGS_SCHEMA_VERSION,
+  isHoldingsDataset,
+} from '@/types/holdings';
 
 const DEFAULT_MAX_AGE_DAYS = 45;
 
@@ -19,6 +24,56 @@ const fail = (message: string): never => {
   console.error(`❌ ${message}`);
   process.exit(1);
 };
+
+/**
+ * Holdings power overlap analysis in the builder. Their absence is a warning, not
+ * a failure: the builder still works, it just cannot tell whether two funds hold
+ * the same things.
+ */
+async function verifyHoldings(fundCount: number): Promise<void> {
+  const target = path.resolve(process.cwd(), 'public', HOLDINGS_PATH);
+
+  let raw: string;
+  try {
+    raw = await fs.readFile(target, 'utf-8');
+  } catch {
+    console.warn(
+      `⚠️ ${HOLDINGS_PATH} is missing — overlap analysis will be unavailable. Re-run \`pnpm sync:data\`.`,
+    );
+    return;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return fail(`${target} is not valid JSON.`);
+  }
+
+  if (!isHoldingsDataset(parsed)) {
+    return fail(`${target} is not a recognised holdings dataset.`);
+  }
+
+  if (parsed.schemaVersion !== HOLDINGS_SCHEMA_VERSION) {
+    return fail(
+      `${target} has schemaVersion ${parsed.schemaVersion}, expected ${HOLDINGS_SCHEMA_VERSION}.`,
+    );
+  }
+
+  const entries = Object.values(parsed.funds);
+  const empty = entries.filter((e) => !e.holdings || e.holdings.length === 0).length;
+  if (empty > 0) return fail(`${empty} holdings entries have no holdings.`);
+
+  const covered = (entries.length / Math.max(1, fundCount)) * 100;
+  const sizeMb = Buffer.byteLength(raw) / 1024 / 1024;
+  console.log(
+    `✅ ${HOLDINGS_PATH}: ${entries.length} funds (${covered.toFixed(0)}% of the universe), ${sizeMb.toFixed(2)} MB`,
+  );
+
+  if (covered < 50) {
+    console.warn(`⚠️ Only ${covered.toFixed(0)}% of funds have holdings — overlap checks will be partial.`);
+  }
+}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -89,6 +144,18 @@ async function main() {
 
   const withOneYear = parsed.funds.filter((fund) => fund.returns?.oneYear != null).length;
   const coverage = (withOneYear / parsed.funds.length) * 100;
+
+  // Fields the investment builder depends on. Absent means the file predates
+  // them and needs a re-sync — a warning rather than a failure, since the
+  // builder degrades to sub-category diversification without them.
+  const withMinimum = parsed.funds.filter((fund) => fund.minInvestment != null).length;
+  if (withMinimum === 0) {
+    console.warn(
+      '⚠️ No fund reports a minimum investment. Re-run `pnpm sync:data` so the builder can respect scheme minimums.',
+    );
+  }
+
+  await verifyHoldings(parsed.funds.length);
 
   const sizeMb = Buffer.byteLength(raw) / 1024 / 1024;
   console.log(

@@ -10,6 +10,7 @@ import { Dashboard } from '@/components/Dashboard';
 import { FundExplorer } from '@/components/FundExplorer';
 import { SIPTracker } from '@/components/SIPTracker';
 import FundDetail from './pages/FundDetail';
+import Builder from './pages/Builder';
 import Profile from './pages/Profile';
 import SIPManagement from './pages/SIPManagement';
 import Portfolio from './pages/Portfolio';
@@ -33,6 +34,7 @@ const App = () => (
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/explorer" element={<FundExplorer />} />
+              <Route path="/builder" element={<Builder />} />
               <Route path="/fund/:id" element={<FundDetail />} />
               <Route element={<ProtectedRoute />}>
                 <Route path="/profile" element={<Profile />} />

@@ -29,6 +29,17 @@ export interface MutualFund {
    * this field directly when asking "how much history is there?".
    */
   inceptionDate?: string | null;
+
+  /**
+   * Minimum lump sum the AMC accepts, in rupees. Observed values range from ₹100
+   * to ₹5,000, which materially constrains how finely a portfolio can be split.
+   */
+  minInvestment?: number | null;
+  minSipInvestment?: number | null;
+  /** Lock-in in months. Non-zero for ELSS and a few closed-ended schemes. */
+  lockInMonths?: number | null;
+  /** Index the scheme measures itself against. */
+  benchmarkName?: string | null;
   
   returns: {
     oneMonth?: number | null;

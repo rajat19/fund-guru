@@ -64,11 +64,26 @@ const askQuestion = (query: string): Promise<string> => {
 async function main() {
   const args = process.argv.slice(2);
   
+  /*
+   * Firestore is opt-in.
+   *
+   * The app reads the published static files, and CI fails the build if
+   * funds.json is missing or malformed, so a deploy cannot ship without one.
+   * Firestore is only reachable as a runtime fallback for a signed-in visitor
+   * when that file 404s — and it has no holdings mirror anyway, so the fallback
+   * is partial by construction.
+   *
+   * Writing it by default cost ~1,541 reads plus ~1,541 writes on every sync and
+   * was the only reason the sync needed Firebase credentials at all. Pass
+   * --firebase (or `pnpm sync:data:firebase`) to refresh it deliberately.
+   *
+   * --skip-firebase is still accepted so existing invocations keep working.
+   */
   const options: SyncOptions = {
     incremental: args.includes('--incremental'),
     exportCsv: args.includes('--csv'),
     exportJson: args.includes('--json'),
-    skipFirebase: args.includes('--skip-firebase'),
+    skipFirebase: !args.includes('--firebase'),
   };
 
   // Parse limit argument
@@ -95,12 +110,21 @@ async function main() {
   console.log('=============================================\n');
   
   console.log('What would you like to do?');
-  console.log('  1. Fetch fresh data from Groww and sync to Firebase (Full Sync, ~15-20 mins)');
-  console.log('  2. Upload existing local cache directly to Firebase (Fast, ~10s)');
-  
-  const answer = await askQuestion('\nSelect an option [1/2]: ');
+  console.log('  1. Full sync — fetch from Groww, write funds.json + holdings.json  (~15-20 mins)');
+  console.log('     Commit those two files and push; that is what the app serves.');
+  console.log('  2. Push the existing public/data/funds.json to Firestore           (~10s)');
+  console.log('     Only refreshes the fallback. Not needed for a normal deploy.');
+  console.log('  3. Full sync AND push to Firestore                                 (~15-20 mins)');
 
-  if (answer.trim() === '2') {
+  const answer = (await askQuestion('\nSelect an option [1/2/3]: ')).trim();
+
+  if (answer === '3') {
+    console.log('\n🔄 Starting full sync from Groww, including the Firestore write...');
+    await synchronizeData({ ...options, skipFirebase: false });
+    return;
+  }
+
+  if (answer === '2') {
     const datasetPath = path.resolve(process.cwd(), 'public', DATASET_PATH);
     try {
       console.log(`\n📖 Reading ${datasetPath}...`);

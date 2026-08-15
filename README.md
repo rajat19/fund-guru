@@ -19,6 +19,7 @@ returns, cost, and risk-adjusted metrics, and shows what tax treatment does to t
 | **Tax layer** | ✅ Working | Bucket classification from allocation, holding-period thresholds, approximate post-tax returns. |
 | **Redemption calculator** | ✅ Working | Amount + holding-period slider → value after exit load and capital gains tax. See [below](#redemption-calculator). |
 | **Track record filter** | ✅ Working | Minimum-history gate, defaulted to 3y. See [below](#track-record--filtering-out-new-funds). |
+| **Investment Builder** | ✅ Working | Rules + amount + risk + asset split → per-fund allocation, overlap-aware. See [below](#investment-builder). |
 | **Dashboard** | ✅ Working | Universe stats, top 3 per category, shortlist filtered by riskometer band. |
 | **Data sync** | ✅ Working | Local CLI only — see [Data pipeline](#data-pipeline). |
 | **Auth** | ✅ Working | Google sign-in; admin gated by Firestore rules. |
@@ -101,6 +102,51 @@ slab-taxed and no marginal rate was supplied. They are also a **single-lot appro
 enough to compare two funds, not an accounting of a real SIP where every instalment has its own
 holding period.
 
+## Investment Builder
+
+Give it rules, an amount, a risk ceiling, a fund count and an asset split, and it produces a concrete
+per-fund allocation.
+
+Picking high-scoring funds is the easy part — that is just the existing ranking. The work is in what
+turns a *list* of good funds into a *portfolio*:
+
+**Overlap.** Five top-ranked large-cap funds hold largely the same twenty stocks. Diversifying across
+funds is not diversifying across holdings, and a plan that ignores this gives a false sense of spread.
+The builder computes weighted overlap — `Σ min(weight_A(stock), weight_B(stock))` — and skips a
+candidate that overlaps an already-picked fund by more than 55%. Weighted rather than a count of
+shared names, because sharing a 9% position matters far more than sharing a 0.2% one.
+
+**Scheme minimums.** Observed minimums range ₹100 to ₹5,000. Splitting ₹50,000 ten ways lands at
+₹5,000, exactly some funds' floor — so allocations that look fine on paper are not placeable. Any fund
+whose share falls below its minimum is dropped and the money redistributed, iteratively, because
+dropping one fund raises everyone else's share.
+
+**Exact reconciliation.** Rounding each share independently leaves the total off by hundreds of
+rupees. Amounts are split by largest-remainder so per-fund figures sum to the input exactly.
+
+Diversification rules are relaxed in a deliberate order when a target cannot otherwise be met —
+sub-category first, then AMC cap, and holdings overlap last, since it is the one that actually
+protects against concentration. Every relaxation, drop and shortfall is reported in the plan's
+warnings rather than silently applied.
+
+Overlap needs [`holdings.json`](#data-pipeline); without it the builder falls back to sub-category and
+AMC diversification and says so on screen. Overlap for an unknown pair is `null`, never `0` —
+"we don't know" and "these share nothing" are opposite conclusions.
+
+### Stock-level holdings
+
+The holdings the builder compares come from the **same v4 search response the sync already fetches**,
+so collecting them costs no extra requests. Two notes on that data:
+
+- The `portfolio/stats` endpoint only exposes concentration percentages (`top_five_corpus_per` and
+  friends), not stock names. The names are on the search endpoint under `holdings`, with
+  `company_name`, `sector_name`, `corpus_per` and a `stock_search_id` slug that joins cleanly across
+  funds — company names do not (`HDFC Bank Ltd` vs `HDFC Bank Limited`).
+- Only the **top 20 per fund** are stored, in a separate `holdings.json` rather than the main dataset.
+  The top 20 cover 80-99% of a fund's corpus, which is ample for judging whether two funds are the
+  same bet, and keeping them out of `funds.json` avoids making every first page load pay ~2.8 MB for a
+  feature most visits never reach.
+
 ## Track record — filtering out new funds
 
 The explorer defaults to **3 years minimum history**, because a screener aimed at long-term holdings
@@ -181,7 +227,8 @@ invites false positives across the 249 strings that already work.
 ## Data pipeline
 
 ```
-Groww public API ──(local CLI only)──▶ public/data/funds.json ──▶ app
+Groww public API ──(local CLI only)──▶ public/data/funds.json    ──▶ app
+                                   ├─▶ public/data/holdings.json ──▶ builder (lazy)
                                    └─▶ Firestore (fallback + user data)
 ```
 
@@ -198,6 +245,8 @@ dataset → Firestore.
 Sync runs **only on your machine**. It cannot run in the browser in production (Groww's API sends no
 CORS headers) and it is deliberately not in CI (no credentials there).
 
+It writes two files and, by default, **does not touch Firestore**:
+
 ```bash
 pnpm sync:data
 ```
@@ -211,6 +260,25 @@ git add public/data/funds.json && git commit -m "chore: refresh fund data" && gi
 `pnpm verify:dataset` runs in CI and fails the build if the file is missing, malformed,
 schema-mismatched, or older than 45 days — so a silent fallback to Firestore becomes a red build
 instead of a surprise bill.
+
+### Why the sync no longer writes Firestore by default
+
+It used to, costing ~1,541 reads (the stale-doc sweep scans the whole collection) plus ~1,541 writes
+on every sync, and it was the only reason the sync needed Firebase credentials.
+
+That fallback is close to unreachable now: CI refuses to ship a build whose `funds.json` is missing or
+malformed, and Firestore reads require sign-in, so an anonymous visitor never gets there. It is also
+only a *partial* fallback — `holdings.json` has no Firestore mirror, so a visitor who fell back would
+lose overlap analysis regardless.
+
+So it is opt-in:
+
+```bash
+pnpm sync:data:firebase
+```
+
+Worth running if you want the fallback warm before a risky deploy, or if something other than this app
+ever needs to read the data server-side. Otherwise skip it.
 
 Other sync modes:
 
@@ -227,8 +295,8 @@ Running `pnpm sync:data` with no arguments also offers a second option: upload t
 
 ## Who can change what
 
-- **Writing fund data** requires a Firestore admin (email allowlist or `isAdmin: true`), and in
-  practice only happens from a local sync — see [`firestore.rules`](firestore.rules).
+- **Writing fund data** requires a Firestore admin (email allowlist or `isAdmin: true`), and only
+  happens when you explicitly run `pnpm sync:data:firebase` — see [`firestore.rules`](firestore.rules).
 - **Reading fund data from Firestore** requires sign-in. Anonymous visitors get the static dataset
   instead. A world-readable collection let anyone enumerate every document and drain the read quota.
 - **Deploying** needs push access to `main`. The deploy workflow holds no Firebase credentials.
@@ -281,7 +349,6 @@ Firebase Auth + Firestore · Vitest
 - **Point-in-time metrics only.** No NAV history is stored, so there are no rolling returns, no
   drawdown, and no independently computed volatility — everything is a Groww snapshot. This is the
   biggest gap; AMFI publishes daily NAV history for free.
-- **No portfolio overlap analysis.** Five top-ranked large-cap funds may hold the same 20 stocks.
 - **No fund manager tenure.** A 5Y record under a manager who left last year is noise. `fund_manager`
   is available on the feed but not yet ingested.
 - **AUM is treated as neutral.** A small-cap fund with very large AUM may be unable to execute its

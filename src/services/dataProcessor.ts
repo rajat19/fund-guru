@@ -1,6 +1,11 @@
 import { GrowwScheme, GrowwSchemeStatsResponse, GrowwSearchResponse } from '../types/api';
 import { MutualFundCategory, RiskLevel, MutualFund } from '@/types/mutualFund';
 import { toNumber, type NumericLike } from '@/utils/number';
+import {
+  TOP_HOLDINGS_LIMIT,
+  type FundHoldings,
+  type Holding,
+} from '@/types/holdings';
 
 /**
  * Coerce every numeric field on a fund to a real number or null.
@@ -26,6 +31,9 @@ export function normalizeFundNumerics(fund: MutualFund): MutualFund {
     aum: num(fund.aum) ?? undefined,
     expenseRatio: num(fund.expenseRatio),
     schemeCode: num(fund.schemeCode) ?? 0,
+    minInvestment: num(fund.minInvestment),
+    minSipInvestment: num(fund.minSipInvestment),
+    lockInMonths: num(fund.lockInMonths),
     returns: mapGroup(fund.returns),
     ratios: mapGroup(fund.ratios),
     rankings: mapGroup(fund.rankings),
@@ -39,6 +47,83 @@ export function normalizeFundNumerics(fund: MutualFund): MutualFund {
       riskRating: num(fund.riskMetrics?.riskRating) ?? undefined,
     },
   };
+}
+
+/**
+ * Collapse the feed's split lock-in object into months.
+ *
+ * All three parts are null for the majority of schemes, which means no lock-in
+ * rather than zero months — but the two are equivalent downstream, so null is
+ * returned to keep "not applicable" distinguishable from a real zero.
+ */
+export function lockInToMonths(
+  lockIn: { years: number | null; months: number | null; days: number | null } | null | undefined,
+): number | null {
+  if (!lockIn) return null;
+
+  const years = toNumber(lockIn.years) ?? 0;
+  const months = toNumber(lockIn.months) ?? 0;
+  const days = toNumber(lockIn.days) ?? 0;
+
+  const total = years * 12 + months + days / 30.44;
+  return total > 0 ? Math.round(total * 10) / 10 : null;
+}
+
+/**
+ * Extract the top holdings by corpus share.
+ *
+ * Capped rather than complete: the top 20 cover 80-99% of a fund's corpus, which
+ * is enough to tell whether two funds are the same bet, and storing all 30-50
+ * would double the published dataset for no analytical gain.
+ */
+export function extractHoldings(
+  schemeCode: number,
+  searchData: GrowwSearchResponse | undefined,
+): FundHoldings | null {
+  const raw = searchData?.holdings;
+  if (!raw || raw.length === 0) return null;
+
+  const holdings: Holding[] = raw
+    .map((h) => ({
+      name: (h.company_name ?? '').trim(),
+      id: h.stock_search_id ?? null,
+      sector: h.sector_name ?? null,
+      percent: toNumber(h.corpus_per) ?? 0,
+    }))
+    .filter((h) => h.name !== '' && h.percent > 0)
+    .sort((a, b) => b.percent - a.percent)
+    .slice(0, TOP_HOLDINGS_LIMIT);
+
+  if (holdings.length === 0) return null;
+
+  return {
+    schemeCode,
+    portfolioDate: raw.find((h) => h.portfolio_date)?.portfolio_date ?? null,
+    holdings,
+  };
+}
+
+/**
+ * Build the holdings dataset from search responses already fetched by the sync.
+ *
+ * Keyed by scheme code rather than scheme id, because that is what joins across
+ * sources and what the app looks up by.
+ */
+export function collectHoldings(
+  schemes: GrowwScheme[],
+  searchData: Record<string, GrowwSearchResponse>,
+): Record<string, FundHoldings> {
+  const out: Record<string, FundHoldings> = {};
+
+  for (const scheme of schemes) {
+    const schemeCode = toNumber(scheme.scheme_code);
+    if (schemeCode == null) continue;
+
+    const entry = extractHoldings(schemeCode, searchData[scheme.id]);
+    if (entry) out[String(schemeCode)] = entry;
+  }
+
+  return out;
 }
 
 export function mapRiskRatingToLevel(riskRating: number): RiskLevel {
@@ -83,6 +168,10 @@ export const processSchemeData = (
     planType: scheme.plan_type || searchData?.plan_type || null,
     schemeType: scheme.scheme_type || searchData?.scheme_type || null,
     exitLoad: searchData?.exit_load || null,
+    minInvestment: searchData?.min_investment_amount ?? null,
+    minSipInvestment: searchData?.min_sip_investment ?? null,
+    lockInMonths: lockInToMonths(searchData?.lock_in),
+    benchmarkName: searchData?.benchmark_name ?? null,
     
     returns: {
       oneMonth: returnStats?.return1m || null,
