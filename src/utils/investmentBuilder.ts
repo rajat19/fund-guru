@@ -10,6 +10,7 @@ import {
   ScoringContext,
   ScoredFund,
   rankFundsWithContext,
+  scoreFund,
 } from '@/utils/scoringEngine';
 import { overlapPercent, type HoldingsIndex } from '@/utils/overlap';
 import { toNumber } from '@/utils/number';
@@ -72,6 +73,18 @@ export interface BuilderInput {
   /** Round allocations to this multiple. */
   roundTo?: number;
   holdings?: HoldingsIndex;
+  /**
+   * Funds the user insists on holding — researched picks, or existing positions.
+   *
+   * Passed as resolved objects rather than ids because a fund someone already
+   * holds may fail their own screening rules, so it will not be in `candidates`.
+   * Pins bypass every filter and are reported when they do; silently dropping a
+   * fund the user explicitly asked for would be the worst outcome, and silently
+   * including one that fails their rules would be misleading.
+   */
+  pinnedFunds?: MutualFund[];
+  /** Fund ids the user has removed from the plan. Never re-selected. */
+  excludedIds?: string[];
 }
 
 export interface PlannedFund {
@@ -248,12 +261,27 @@ const selectFunds = (
  * Iterative because dropping a fund raises everyone else's share, which can make
  * a previously-unplaceable fund placeable and vice versa.
  */
+/**
+ * Score a pinned fund directly.
+ *
+ * rankFundsWithContext deliberately drops funds with too little data to rank,
+ * which is right for automatic selection and wrong for a pin: the user named
+ * this fund, so it goes in whatever its coverage.
+ */
+const scorePinned = (fund: MutualFund, context: ScoringContext): ScoredFund => {
+  const breakdown = scoreFund(fund, context);
+  return { ...fund, score: breakdown.score, breakdown, rank: 0 };
+};
+
 const allocateWithinClass = (
   funds: ScoredFund[],
   amount: number,
   weighting: 'equal' | 'score',
   roundTo: number,
   onDrop: (fund: ScoredFund, share: number) => void,
+  /** Pins, which are warned about rather than dropped when their share is short. */
+  protectedIds: Set<string>,
+  onUnderMinimum: (fund: ScoredFund, share: number) => void,
 ): Map<string, number> => {
   let eligible = [...funds];
 
@@ -277,9 +305,19 @@ const allocateWithinClass = (
 
     if (tooSmall.length === 0) return split;
 
+    const droppable = tooSmall.filter((f) => !protectedIds.has(f.id));
+
+    if (droppable.length === 0) {
+      // Only pins are under their minimum. Report and keep them: the user asked
+      // for these funds, and an unexecutable plan they can see how to fix beats a
+      // plan that quietly omits what they requested.
+      for (const fund of tooSmall) onUnderMinimum(fund, split.get(fund.id) ?? 0);
+      return split;
+    }
+
     // Drop the worst-scoring offender only, so one tiny share does not evict a
     // whole class at once.
-    const drop = tooSmall.reduce((worst, f) => (f.score < worst.score ? f : worst));
+    const drop = droppable.reduce((worst, f) => (f.score < worst.score ? f : worst));
     onDrop(drop, split.get(drop.id) ?? 0);
     eligible = eligible.filter((f) => f.id !== drop.id);
   }
@@ -314,14 +352,44 @@ export const buildPortfolio = (
     };
   }
 
-  // Screen once: risk band, track record, and enough data to rank on.
+  /*
+   * Removing a fund re-solves the plan rather than sliding "the next best" into
+   * the vacated slot. Selection is constrained — asset-class targets, one fund
+   * per sub-category, a cap per AMC, an overlap ceiling — so a replacement has
+   * to be legal against the funds that remain, which a precomputed flat ranking
+   * cannot know. Re-solving is also cheap: it is a greedy walk over an in-memory
+   * list, so earlier picks are unaffected and only the freed slot changes hands.
+   */
+  const excludedIds = new Set(input.excludedIds ?? []);
+
+  const pinnedFunds = (input.pinnedFunds ?? []).filter((fund) => !excludedIds.has(fund.id));
+  const pinnedIds = new Set(pinnedFunds.map((fund) => fund.id));
+
+  // Screen once: risk band, track record, and enough data to rank on. Pins are
+  // held out of the screen entirely and merged back in per class.
   const eligible = candidates.filter((fund) => {
+    if (excludedIds.has(fund.id)) return false;
+    if (pinnedIds.has(fund.id)) return false;
     if (!withinRisk(fund, input.maxRisk)) return false;
     if (trackRecordOf(fund).years < minYears) return false;
     return true;
   });
 
-  if (eligible.length === 0) {
+  // Say so when a pin fails the user's own rules, rather than letting it sit in
+  // the plan looking like it passed.
+  for (const fund of pinnedFunds) {
+    const reasons: string[] = [];
+    if (!withinRisk(fund, input.maxRisk)) reasons.push(`risk is ${fund.riskMetrics.risk}`);
+    const years = trackRecordOf(fund).years;
+    if (years < minYears) reasons.push(`only ${years.toFixed(years < 1 ? 1 : 0)}y of history`);
+    if (reasons.length > 0) {
+      warnings.push(
+        `${fund.schemeName} is pinned and kept despite failing your filters (${reasons.join(', ')}).`,
+      );
+    }
+  }
+
+  if (eligible.length === 0 && pinnedFunds.length === 0) {
     return {
       totalAmount: input.totalAmount,
       allocatedAmount: 0,
@@ -360,10 +428,32 @@ export const buildPortfolio = (
 
   for (const cls of classes) {
     const targetAmount = classAmounts.get(cls) ?? 0;
-    const wanted = classFundCounts.get(cls) ?? 1;
     const pool = eligible.filter((fund) => classifyAssetClass(fund) === cls);
 
-    if (pool.length === 0) {
+    // Pins occupy slots in their own class before anything is auto-selected.
+    const classPins = pinnedFunds
+      .filter((fund) => classifyAssetClass(fund) === cls)
+      .map((fund) => scorePinned(fund, context));
+
+    // Pins win over the requested count. Reducing the count to make room would
+    // silently drop a fund the user named.
+    const requested = classFundCounts.get(cls) ?? 1;
+    const wanted = Math.max(requested, classPins.length);
+    if (classPins.length > requested) {
+      warnings.push(
+        `${ASSET_CLASS_LABEL[cls]}: holds ${classPins.length} pinned fund${classPins.length === 1 ? '' : 's'}, above the ${requested} this class was allotted.`,
+      );
+    }
+
+    // Pins count against the AMC cap so auto-selection does not pile onto the
+    // same house the user already chose.
+    for (const pin of classPins) {
+      const house = pin.fundHouse || 'unknown';
+      state.perHouse.set(house, (state.perHouse.get(house) ?? 0) + 1);
+    }
+    state.picked.push(...classPins);
+
+    if (pool.length === 0 && classPins.length === 0) {
       plans.push({
         assetClass: cls,
         targetPercent: allocation[cls] ?? 0,
@@ -383,16 +473,24 @@ export const buildPortfolio = (
     // comes back short with no explanation.
     const ranked = rankFundsWithContext(pool, context);
     const excluded = pool.length - ranked.length;
-    if (excluded > 0 && ranked.length < wanted) {
+    if (excluded > 0 && ranked.length + classPins.length < wanted) {
       warnings.push(
         `${ASSET_CLASS_LABEL[cls]}: ${excluded} of ${pool.length} matching funds were skipped for having too little data to rank.`,
       );
     }
 
     const relaxations: string[] = [];
-    const selected = selectFunds(ranked, wanted, rules, state, input.holdings, (msg) =>
-      relaxations.push(msg),
+    const autoSelected = selectFunds(
+      ranked,
+      Math.max(0, wanted - classPins.length),
+      rules,
+      state,
+      input.holdings,
+      (msg) => relaxations.push(msg),
     );
+
+    // Pins first so they lead the class in the rendered plan.
+    const selected = [...classPins, ...autoSelected];
 
     if (relaxations.length > 0) {
       warnings.push(
@@ -401,11 +499,28 @@ export const buildPortfolio = (
     }
 
     const dropped: string[] = [];
-    const amounts = allocateWithinClass(selected, targetAmount, weighting, roundTo, (fund, share) =>
-      dropped.push(
-        `${fund.schemeName} (share ₹${share.toLocaleString('en-IN')} below its ₹${minInvestmentOf(fund).toLocaleString('en-IN')} minimum)`,
-      ),
+    const underMinimum: string[] = [];
+    const amounts = allocateWithinClass(
+      selected,
+      targetAmount,
+      weighting,
+      roundTo,
+      (fund, share) =>
+        dropped.push(
+          `${fund.schemeName} (share ₹${share.toLocaleString('en-IN')} below its ₹${minInvestmentOf(fund).toLocaleString('en-IN')} minimum)`,
+        ),
+      pinnedIds,
+      (fund, share) =>
+        underMinimum.push(
+          `${fund.schemeName} gets ₹${share.toLocaleString('en-IN')} but needs ₹${minInvestmentOf(fund).toLocaleString('en-IN')}`,
+        ),
     );
+
+    if (underMinimum.length > 0) {
+      warnings.push(
+        `${ASSET_CLASS_LABEL[cls]}: pinned fund${underMinimum.length === 1 ? '' : 's'} below the scheme minimum — ${underMinimum.join('; ')}. Raise the amount or hold fewer funds.`,
+      );
+    }
 
     if (dropped.length > 0) {
       warnings.push(

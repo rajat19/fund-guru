@@ -521,3 +521,210 @@ describe('buildPortfolio — reporting', () => {
     expect(topScored).toBeGreaterThan(topEqual);
   });
 });
+
+describe('buildPortfolio — pinned and excluded funds', () => {
+  const base = {
+    totalAmount: 1_000_000,
+    maxRisk: 'Moderate' as const,
+    allocation: { equity: 60, debt: 40 },
+    fundCount: 6,
+    minTrackRecordYears: 3,
+  };
+
+  it('never selects an excluded fund', () => {
+    const funds = universe();
+    const first = plan(funds, base).funds[0].fund.id;
+
+    const after = plan(funds, { ...base, excludedIds: [first] });
+    expect(after.funds.map((f) => f.fund.id)).not.toContain(first);
+  });
+
+  it('backfills the freed slot from the same asset class', () => {
+    // The point of re-solving rather than sliding in the next fund overall:
+    // removing an equity fund must be replaced by an equity fund, or the target
+    // split silently breaks.
+    const funds = universe();
+    const before = plan(funds, base);
+    const victim = before.funds.find((f) => f.assetClass === 'equity')!;
+
+    const after = plan(funds, { ...base, excludedIds: [victim.fund.id] });
+
+    expect(after.funds).toHaveLength(before.funds.length);
+    expect(after.funds.filter((f) => f.assetClass === 'equity')).toHaveLength(
+      before.funds.filter((f) => f.assetClass === 'equity').length,
+    );
+    expect(after.allocatedAmount).toBe(before.allocatedAmount);
+  });
+
+  it('leaves higher-ranked picks undisturbed when a later one is excluded', () => {
+    // Selection is a greedy walk over a stable ranking, so excluding a fund can
+    // only affect picks at or after its position.
+    const funds = universe();
+    const before = plan(funds, base);
+    const equity = before.funds.filter((f) => f.assetClass === 'equity');
+    const last = equity[equity.length - 1];
+
+    const after = plan(funds, { ...base, excludedIds: [last.fund.id] });
+    const survivors = after.funds.filter((f) => f.assetClass === 'equity').map((f) => f.fund.id);
+
+    for (const kept of equity.slice(0, -1)) {
+      expect(survivors).toContain(kept.fund.id);
+    }
+  });
+
+  it('includes a pinned fund', () => {
+    const funds = universe();
+    const pin = funds.find((f) => f.id === 'eq-3-2')!;
+
+    const result = plan(funds, { ...base, pinnedFunds: [pin] });
+    expect(result.funds.map((f) => f.fund.id)).toContain(pin.id);
+  });
+
+  it('counts pins against the requested fund count', () => {
+    const funds = universe();
+    const pin = funds.find((f) => f.id === 'eq-3-2')!;
+
+    const withPin = plan(funds, { ...base, pinnedFunds: [pin] });
+    expect(withPin.funds).toHaveLength(plan(funds, base).funds.length);
+  });
+
+  it('keeps a pin that is not in the candidate list at all', () => {
+    // The realistic case: a fund the user already holds, screened out by their
+    // own rules, so it never reaches buildPortfolio as a candidate.
+    const funds = universe();
+    const held = eligible('held-elsewhere', {
+      category: 'Equity',
+      subCategory: 'Large Cap Fund',
+      fundHouse: 'Outside AMC',
+    });
+
+    const result = plan(funds, { ...base, pinnedFunds: [held] });
+    expect(result.funds.map((f) => f.fund.id)).toContain('held-elsewhere');
+  });
+
+  it('keeps a pin that fails the risk ceiling, and says so', () => {
+    const funds = universe();
+    const risky = eligible('risky-pin', {
+      category: 'Equity',
+      subCategory: 'Small Cap Fund',
+      riskMetrics: { risk: 'Very High' },
+    });
+
+    const result = plan(funds, { ...base, pinnedFunds: [risky] });
+
+    expect(result.funds.map((f) => f.fund.id)).toContain('risky-pin');
+    expect(result.warnings.some((w) => /risky-pin/.test(w) && /risk is Very High/.test(w))).toBe(
+      true,
+    );
+  });
+
+  it('keeps a pin with too little history, and says so', () => {
+    const funds = universe();
+    const young = makeFund({
+      id: 'young-pin',
+      schemeName: 'young-pin Fund',
+      schemeCode: 99_001,
+      category: 'Equity',
+      subCategory: 'Flexi Cap Fund',
+      inceptionDate: '2026-01-01',
+      minInvestment: 500,
+      expenseRatio: 0.5,
+      riskMetrics: { risk: 'Moderate' },
+    });
+
+    const result = plan(funds, { ...base, pinnedFunds: [young] });
+
+    expect(result.funds.map((f) => f.fund.id)).toContain('young-pin');
+    expect(result.warnings.some((w) => /young-pin/.test(w) && /history/.test(w))).toBe(true);
+  });
+
+  it('lets an exclusion override a pin', () => {
+    // Both set means the user pinned it and then removed it; the later intent wins.
+    const funds = universe();
+    const pin = funds.find((f) => f.id === 'eq-3-2')!;
+
+    const result = plan(funds, { ...base, pinnedFunds: [pin], excludedIds: [pin.id] });
+    expect(result.funds.map((f) => f.fund.id)).not.toContain(pin.id);
+  });
+
+  it('honours pins beyond the class allotment and warns', () => {
+    const funds = universe();
+    // Four equity pins against a plan that only wants two equity funds.
+    const pins = ['eq-0-0', 'eq-1-1', 'eq-2-2', 'eq-3-0'].map(
+      (id) => funds.find((f) => f.id === id)!,
+    );
+
+    const result = plan(funds, {
+      ...base,
+      fundCount: 3,
+      allocation: { equity: 60, debt: 40 },
+      pinnedFunds: pins,
+    });
+
+    for (const pin of pins) {
+      expect(result.funds.map((f) => f.fund.id)).toContain(pin.id);
+    }
+    expect(result.warnings.some((w) => /pinned fund/.test(w) && /allotted/.test(w))).toBe(true);
+  });
+
+  it('keeps a pin below its scheme minimum rather than dropping it', () => {
+    // Auto-selected funds get dropped when their share is too small. A pin must
+    // not be: the user asked for it, and a visible unexecutable share tells them
+    // what to change.
+    const funds = universe();
+    const expensive = eligible('high-minimum', {
+      category: 'Equity',
+      subCategory: 'Large Cap Fund',
+      fundHouse: 'Outside AMC',
+      minInvestment: 5_000_000,
+    });
+
+    const result = plan(funds, {
+      ...base,
+      totalAmount: 100_000,
+      pinnedFunds: [expensive],
+    });
+
+    expect(result.funds.map((f) => f.fund.id)).toContain('high-minimum');
+    expect(
+      result.warnings.some((w) => /high-minimum/.test(w) && /minimum/.test(w)),
+    ).toBe(true);
+  });
+
+  it('builds a plan from pins alone when nothing passes the filters', () => {
+    const pin = eligible('only-pin', { category: 'Equity', subCategory: 'Large Cap Fund' });
+
+    const result = plan([], {
+      ...base,
+      allocation: { equity: 100 },
+      pinnedFunds: [pin],
+    });
+
+    expect(result.funds.map((f) => f.fund.id)).toEqual(['only-pin']);
+    expect(result.allocatedAmount).toBeGreaterThan(0);
+  });
+
+  it('counts a pin against the per-AMC cap', () => {
+    // Otherwise auto-selection piles more of the same house on top of the user's
+    // own choice, quietly concentrating the plan.
+    const funds = universe();
+    const pin = funds.find((f) => f.id === 'eq-0-0')!;
+
+    // The fixture universe has three AMCs and the house cap is global across
+    // classes, so a cap of 1 supports at most three funds. Asking for more would
+    // force the relaxation stages and test nothing about the cap.
+    const result = plan(funds, {
+      ...base,
+      fundCount: 3,
+      allocation: { equity: 67, debt: 33 },
+      pinnedFunds: [pin],
+      diversification: { ...DEFAULT_DIVERSIFICATION, maxPerFundHouse: 1 },
+    });
+
+    expect(result.warnings.some((w) => /per AMC/.test(w))).toBe(false);
+
+    const fromSameHouse = result.funds.filter((f) => f.fund.fundHouse === pin.fundHouse);
+    expect(fromSameHouse).toHaveLength(1);
+    expect(fromSameHouse[0].fund.id).toBe(pin.id);
+  });
+});
