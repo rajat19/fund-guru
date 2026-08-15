@@ -11,6 +11,12 @@ import {
   DATASET_SCHEMA_VERSION,
   type FundDataset,
 } from '@/types/dataset';
+import {
+  HOLDINGS_PATH,
+  HOLDINGS_SCHEMA_VERSION,
+  type FundHoldings,
+  type HoldingsDataset,
+} from '@/types/holdings';
 import { FUNDS_CACHE_KEY, setLocalCache } from '@/utils/cache';
 
 export interface ExportOptions {
@@ -163,6 +169,48 @@ export const updateLocalCache = async (funds: MutualFund[]): Promise<void> => {
     // costs reads — so make it loud rather than swallowing it.
     console.error(`❌ Failed to write ${target}:`, error);
     throw error;
+  }
+};
+
+/**
+ * Write the published holdings file (public/data/holdings.json).
+ *
+ * Separate from funds.json on purpose: holdings roughly double the payload and
+ * only the investment builder's overlap analysis needs them, so they are fetched
+ * on demand rather than on every first page load.
+ */
+export const writeHoldings = async (
+  holdings: Record<string, FundHoldings>,
+): Promise<void> => {
+  if (typeof window !== 'undefined') return;
+
+  const count = Object.keys(holdings).length;
+  if (count === 0) {
+    console.warn('⚠️ No holdings collected — skipping holdings.json');
+    return;
+  }
+
+  const dataset: HoldingsDataset = {
+    schemaVersion: HOLDINGS_SCHEMA_VERSION,
+    generatedAt: new Date().toISOString(),
+    count,
+    funds: holdings,
+  };
+
+  const target = `public/${HOLDINGS_PATH}`;
+
+  try {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, JSON.stringify(dataset));
+
+    const { size } = await fs.stat(target);
+    console.log(`✅ Wrote ${target} — ${count} funds, ${(size / 1024 / 1024).toFixed(2)} MB`);
+  } catch (error) {
+    // Non-fatal: overlap analysis degrades to unavailable, everything else works.
+    console.error(`❌ Failed to write ${target}:`, error);
   }
 };
 

@@ -7,12 +7,14 @@
 import { getAllSchemes } from '@/services/groww';
 import { fetchEnhancedData } from '@/services/dataFetcher';
 import { processSchemes } from '@/services/batchProcessor';
-import { exportToCSV, exportToJSON, updateLocalCache } from '@/services/dataExporter';
+import { collectHoldings } from '@/services/dataProcessor';
+import { exportToCSV, exportToJSON, updateLocalCache, writeHoldings } from '@/services/dataExporter';
 import { saveFundsInBatches } from '@/services/firebaseService';
 import { applyInceptionDates, fetchInceptionDates } from '@/services/inceptionDates';
 import { createProgressCallback } from '@/utils/progressTracker';
 import type { GrowwScheme } from '@/types/api';
 import type { MutualFund } from '@/types/mutualFund';
+import type { FundHoldings } from '@/types/holdings';
 
 export type SyncStep = 'fetching' | 'enhancing' | 'processing' | 'exporting' | 'saving' | 'complete' | 'error';
 
@@ -76,7 +78,7 @@ export const executeSync = async (options: SyncOptions = {}): Promise<SyncResult
 
     // Step 2: Enhance & Process data
     reportProgress({ step: 'enhancing', stepLabel: 'Fetching enhanced data (stats & search)...', processed: 0, total: schemes.length, errors });
-    const processedFunds = await processSchemesWithData(schemes, options, (step, processed, total, stepLabel) => {
+    const { funds: processedFunds, holdings } = await processSchemesWithData(schemes, options, (step, processed, total, stepLabel) => {
       reportProgress({ step, stepLabel: stepLabel || 'Fetching enhanced data (stats & search)...', processed, total, errors });
     });
 
@@ -84,6 +86,7 @@ export const executeSync = async (options: SyncOptions = {}): Promise<SyncResult
     if (options.signal?.aborted) throw new Error('Sync cancelled by user');
     reportProgress({ step: 'exporting', stepLabel: 'Updating local cache...', processed: 0, total: processedFunds.length, errors });
     await updateLocalCache(processedFunds);
+    await writeHoldings(holdings);
     const exportedFiles = await exportData(processedFunds, options);
     
     // Step 4: Save to Firebase
@@ -159,7 +162,7 @@ const processSchemesWithData = async (
   schemes: GrowwScheme[],
   options: SyncOptions,
   onStepProgress?: (step: SyncStep, processed: number, total: number, stepLabel?: string) => void,
-): Promise<MutualFund[]> => {
+): Promise<{ funds: MutualFund[]; holdings: Record<string, FundHoldings> }> => {
   console.log('\n🔄 Processing schemes with enhanced data...');
   
   if (options.signal?.aborted) throw new Error('Sync cancelled by user');
@@ -209,6 +212,11 @@ const processSchemesWithData = async (
     }
   );
 
+  // Holdings come from search responses already in hand, so this costs no extra
+  // requests — it is pure extraction.
+  const holdings = collectHoldings(schemes, enhancedData.searchData);
+  console.log(`📦 Collected holdings for ${Object.keys(holdings).length}/${schemes.length} funds`);
+
   // Enrichment, not a dependency: if this fails the track record falls back to
   // return-horizon inference, so a failure must not abort an otherwise good sync.
   if (options.signal?.aborted) throw new Error('Sync cancelled by user');
@@ -216,11 +224,11 @@ const processSchemesWithData = async (
 
   try {
     const dates = await fetchInceptionDates(options.signal);
-    return applyInceptionDates(processedFunds, dates).funds;
+    return { funds: applyInceptionDates(processedFunds, dates).funds, holdings };
   } catch (error) {
     if (options.signal?.aborted) throw new Error('Sync cancelled by user');
     console.warn('⚠️ Inception date enrichment failed; continuing without it:', error);
-    return processedFunds;
+    return { funds: processedFunds, holdings };
   }
 };
 
