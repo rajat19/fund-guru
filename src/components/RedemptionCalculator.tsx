@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { NumericInput } from '@/components/ui/numeric-input';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Badge } from '@/components/ui/badge';
 import { Calculator, Info } from 'lucide-react';
 import { MutualFund } from '@/types/mutualFund';
-import { projectRedemption } from '@/utils/taxation';
+import { projectRedemption, returnBasisFor } from '@/utils/taxation';
 import { describeExitLoad, exitLoadPolicyFor } from '@/utils/exitLoad';
 import { formatCurrency, formatPercent } from '@/utils/format';
 
@@ -41,6 +42,9 @@ export function RedemptionCalculator({ fund }: RedemptionCalculatorProps) {
 
   const policy = useMemo(() => exitLoadPolicyFor(fund), [fund]);
 
+  // Independent of the amount: tells us whether the fund is projectable at all.
+  const basis = useMemo(() => returnBasisFor(fund, months), [fund, months]);
+
   const projection = useMemo(
     () =>
       projectRedemption(fund, {
@@ -51,7 +55,14 @@ export function RedemptionCalculator({ fund }: RedemptionCalculatorProps) {
     [fund, amount, months, slabRate],
   );
 
-  if (!projection) {
+  /*
+   * Two distinct reasons there may be nothing to show, and they must not share a
+   * message. No return history is a property of the fund and nothing the user can
+   * fix here. An empty amount box is transient — and critically, the card must
+   * keep rendering its inputs in that case, or clearing the field would remove
+   * the very box needed to type a new value into.
+   */
+  if (!basis) {
     return (
       <Card>
         <CardHeader>
@@ -69,31 +80,36 @@ export function RedemptionCalculator({ fund }: RedemptionCalculatorProps) {
     );
   }
 
-  const { basis, grossValue, grossGain, exitLoadAmount, taxAmount, netValue, netGain } = projection;
-
   // Waterfall rows. Deductions are negative and rendered in the loss colour.
-  const rows: Array<{ label: string; value: number | null; kind: 'add' | 'deduct' | 'total' }> = [
-    { label: 'Invested', value: projection.invested, kind: 'add' },
-    { label: `Growth at ${basis.label} CAGR of ${formatPercent(basis.annualPercent)}`, value: grossGain, kind: 'add' },
-    { label: 'Value before costs', value: grossValue, kind: 'total' },
-    {
-      label:
-        projection.exitLoad.ratePercent > 0
-          ? `Exit load (${projection.exitLoad.ratePercent}% on ${(projection.exitLoad.chargeableFraction * 100).toFixed(0)}%)`
-          : 'Exit load',
-      value: -exitLoadAmount,
-      kind: 'deduct',
-    },
-    {
-      label:
-        projection.effectiveTaxRatePercent != null
-          ? `Capital gains tax (${projection.isLongTerm ? 'long' : 'short'}-term, ${formatPercent(projection.effectiveTaxRatePercent)})`
-          : 'Capital gains tax (needs your slab rate)',
-      value: taxAmount === null ? null : -taxAmount,
-      kind: 'deduct',
-    },
-    { label: 'You keep', value: netValue, kind: 'total' },
-  ];
+  const rows: Array<{ label: string; value: number | null; kind: 'add' | 'deduct' | 'total' }> =
+    projection
+      ? [
+          { label: 'Invested', value: projection.invested, kind: 'add' },
+          {
+            label: `Growth at ${basis.label} CAGR of ${formatPercent(basis.annualPercent)}`,
+            value: projection.grossGain,
+            kind: 'add',
+          },
+          { label: 'Value before costs', value: projection.grossValue, kind: 'total' },
+          {
+            label:
+              projection.exitLoad.ratePercent > 0
+                ? `Exit load (${projection.exitLoad.ratePercent}% on ${(projection.exitLoad.chargeableFraction * 100).toFixed(0)}%)`
+                : 'Exit load',
+            value: -projection.exitLoadAmount,
+            kind: 'deduct',
+          },
+          {
+            label:
+              projection.effectiveTaxRatePercent != null
+                ? `Capital gains tax (${projection.isLongTerm ? 'long' : 'short'}-term, ${formatPercent(projection.effectiveTaxRatePercent)})`
+                : 'Capital gains tax (needs your slab rate)',
+            value: projection.taxAmount === null ? null : -projection.taxAmount,
+            kind: 'deduct',
+          },
+          { label: 'You keep', value: projection.netValue, kind: 'total' },
+        ]
+      : [];
 
   return (
     <Card>
@@ -113,16 +129,15 @@ export function RedemptionCalculator({ fund }: RedemptionCalculatorProps) {
         <div className="space-y-2">
           <Label htmlFor="redemption-amount">Amount invested</Label>
           <div className="flex flex-wrap items-center gap-2">
-            <Input
+            <NumericInput
               id="redemption-amount"
-              type="number"
-              min={1000}
+              min={0}
               step={10000}
               value={amount}
-              onChange={(e) => {
-                const next = Number(e.target.value);
-                if (Number.isFinite(next) && next > 0) setAmount(next);
-              }}
+              // Empty means zero invested; the card then prompts for an amount
+              // instead of rendering a waterfall of zeros.
+              emptyValue={0}
+              onValueChange={(next) => setAmount(next ?? 0)}
               className="w-40"
             />
             {PRESET_AMOUNTS.map((preset) => (
@@ -160,26 +175,30 @@ export function RedemptionCalculator({ fund }: RedemptionCalculatorProps) {
         </div>
 
         {/* Slab rate — only asked for when it changes the answer */}
-        {projection.taxAmount === null && (
+        {projection?.taxAmount === null && (
           <div className="space-y-2">
             <Label htmlFor="slab-rate">Your marginal slab rate (%)</Label>
-            <Input
+            <NumericInput
               id="slab-rate"
-              type="number"
               min={0}
               max={45}
               step={5}
               placeholder="e.g. 30"
-              onChange={(e) => {
-                const next = Number(e.target.value);
-                setSlabRate(Number.isFinite(next) && next >= 0 ? next : undefined);
-              }}
+              value={slabRate}
+              // Empty means "not specified" here, not 0% tax — passing 0 through
+              // would silently compute a tax-free outcome for a slab-taxed fund.
+              onValueChange={setSlabRate}
               className="w-32"
             />
           </div>
         )}
 
-        {/* Waterfall */}
+        {/* Waterfall, or a prompt when there is no amount to divide */}
+        {!projection ? (
+          <p className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-center text-muted-foreground">
+            Enter an amount to see what you would keep after exit load and tax.
+          </p>
+        ) : (
         <div className="rounded-lg border border-border divide-y divide-border">
           {rows.map((row) => (
             <div
@@ -203,13 +222,14 @@ export function RedemptionCalculator({ fund }: RedemptionCalculatorProps) {
             </div>
           ))}
         </div>
+        )}
 
         {/* Headline outcome */}
-        {netGain !== null && projection.netCagrPercent !== null && (
+        {projection && projection.netGain !== null && projection.netCagrPercent !== null && (
           <div className="grid grid-cols-2 gap-4">
             <div>
               <div className="text-xs text-muted-foreground">Net gain</div>
-              <div className="text-lg font-semibold">{formatCurrency(netGain)}</div>
+              <div className="text-lg font-semibold">{formatCurrency(projection.netGain)}</div>
             </div>
             <div>
               <div className="text-xs text-muted-foreground">Net CAGR after tax &amp; load</div>
@@ -221,7 +241,7 @@ export function RedemptionCalculator({ fund }: RedemptionCalculatorProps) {
         )}
 
         {/* Expense ratio: context, never a deduction */}
-        {projection.terDragAmount !== null && projection.terDragAmount > 0 && (
+        {projection && projection.terDragAmount !== null && projection.terDragAmount > 0 && (
           <div className="rounded-lg bg-muted/30 px-4 py-3 text-xs text-muted-foreground flex gap-2">
             <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             <span>
@@ -230,9 +250,9 @@ export function RedemptionCalculator({ fund }: RedemptionCalculatorProps) {
               it comes out of NAV daily, so it is not a separate charge. Had this fund been free,
               the same holding would have reached roughly{' '}
               <strong className="text-foreground">
-                {formatCurrency(grossValue + projection.terDragAmount)}
+                {formatCurrency(projection.grossValue + projection.terDragAmount)}
               </strong>{' '}
-              instead of {formatCurrency(grossValue)}, so the fee cost about{' '}
+              instead of {formatCurrency(projection.grossValue)}, so the fee cost about{' '}
               <strong className="text-foreground">
                 {formatCurrency(projection.terDragAmount)}
               </strong>{' '}
@@ -252,7 +272,7 @@ export function RedemptionCalculator({ fund }: RedemptionCalculatorProps) {
           </div>
         </div>
 
-        {projection.notes.length > 0 && (
+        {projection && projection.notes.length > 0 && (
           <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-5">
             {projection.notes.map((note) => (
               <li key={note}>{note}</li>
