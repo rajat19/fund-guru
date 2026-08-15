@@ -19,6 +19,7 @@ returns, cost, and risk-adjusted metrics, and shows what tax treatment does to t
 | **Tax layer** | ✅ Working | Bucket classification from allocation, holding-period thresholds, approximate post-tax returns. |
 | **Redemption calculator** | ✅ Working | Amount + holding-period slider → value after exit load and capital gains tax. See [below](#redemption-calculator). |
 | **Track record filter** | ✅ Working | Minimum-history gate, defaulted to 3y. See [below](#track-record--filtering-out-new-funds). |
+| **Investment Builder** | ✅ Working | Rules + amount + risk + asset split → per-fund allocation, overlap-aware. See [below](#investment-builder). |
 | **Dashboard** | ✅ Working | Universe stats, top 3 per category, shortlist filtered by riskometer band. |
 | **Data sync** | ✅ Working | Local CLI only — see [Data pipeline](#data-pipeline). |
 | **Auth** | ✅ Working | Google sign-in; admin gated by Firestore rules. |
@@ -101,6 +102,51 @@ slab-taxed and no marginal rate was supplied. They are also a **single-lot appro
 enough to compare two funds, not an accounting of a real SIP where every instalment has its own
 holding period.
 
+## Investment Builder
+
+Give it rules, an amount, a risk ceiling, a fund count and an asset split, and it produces a concrete
+per-fund allocation.
+
+Picking high-scoring funds is the easy part — that is just the existing ranking. The work is in what
+turns a *list* of good funds into a *portfolio*:
+
+**Overlap.** Five top-ranked large-cap funds hold largely the same twenty stocks. Diversifying across
+funds is not diversifying across holdings, and a plan that ignores this gives a false sense of spread.
+The builder computes weighted overlap — `Σ min(weight_A(stock), weight_B(stock))` — and skips a
+candidate that overlaps an already-picked fund by more than 55%. Weighted rather than a count of
+shared names, because sharing a 9% position matters far more than sharing a 0.2% one.
+
+**Scheme minimums.** Observed minimums range ₹100 to ₹5,000. Splitting ₹50,000 ten ways lands at
+₹5,000, exactly some funds' floor — so allocations that look fine on paper are not placeable. Any fund
+whose share falls below its minimum is dropped and the money redistributed, iteratively, because
+dropping one fund raises everyone else's share.
+
+**Exact reconciliation.** Rounding each share independently leaves the total off by hundreds of
+rupees. Amounts are split by largest-remainder so per-fund figures sum to the input exactly.
+
+Diversification rules are relaxed in a deliberate order when a target cannot otherwise be met —
+sub-category first, then AMC cap, and holdings overlap last, since it is the one that actually
+protects against concentration. Every relaxation, drop and shortfall is reported in the plan's
+warnings rather than silently applied.
+
+Overlap needs [`holdings.json`](#data-pipeline); without it the builder falls back to sub-category and
+AMC diversification and says so on screen. Overlap for an unknown pair is `null`, never `0` —
+"we don't know" and "these share nothing" are opposite conclusions.
+
+### Stock-level holdings
+
+The holdings the builder compares come from the **same v4 search response the sync already fetches**,
+so collecting them costs no extra requests. Two notes on that data:
+
+- The `portfolio/stats` endpoint only exposes concentration percentages (`top_five_corpus_per` and
+  friends), not stock names. The names are on the search endpoint under `holdings`, with
+  `company_name`, `sector_name`, `corpus_per` and a `stock_search_id` slug that joins cleanly across
+  funds — company names do not (`HDFC Bank Ltd` vs `HDFC Bank Limited`).
+- Only the **top 20 per fund** are stored, in a separate `holdings.json` rather than the main dataset.
+  The top 20 cover 80-99% of a fund's corpus, which is ample for judging whether two funds are the
+  same bet, and keeping them out of `funds.json` avoids making every first page load pay ~2.8 MB for a
+  feature most visits never reach.
+
 ## Track record — filtering out new funds
 
 The explorer defaults to **3 years minimum history**, because a screener aimed at long-term holdings
@@ -181,7 +227,8 @@ invites false positives across the 249 strings that already work.
 ## Data pipeline
 
 ```
-Groww public API ──(local CLI only)──▶ public/data/funds.json ──▶ app
+Groww public API ──(local CLI only)──▶ public/data/funds.json    ──▶ app
+                                   ├─▶ public/data/holdings.json ──▶ builder (lazy)
                                    └─▶ Firestore (fallback + user data)
 ```
 
@@ -281,7 +328,6 @@ Firebase Auth + Firestore · Vitest
 - **Point-in-time metrics only.** No NAV history is stored, so there are no rolling returns, no
   drawdown, and no independently computed volatility — everything is a Groww snapshot. This is the
   biggest gap; AMFI publishes daily NAV history for free.
-- **No portfolio overlap analysis.** Five top-ranked large-cap funds may hold the same 20 stocks.
 - **No fund manager tenure.** A 5Y record under a manager who left last year is noise. `fund_manager`
   is available on the feed but not yet ingested.
 - **AUM is treated as neutral.** A small-cap fund with very large AUM may be unable to execute its
