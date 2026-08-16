@@ -14,7 +14,7 @@ const DB_VERSION = 1;
 const STORE = 'cache';
 
 /** Bump when the cached payload shape changes. Stale versions are discarded. */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

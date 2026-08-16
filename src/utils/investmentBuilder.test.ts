@@ -181,8 +181,13 @@ describe('buildPortfolio — allocation arithmetic', () => {
 });
 
 describe('buildPortfolio — scheme minimums', () => {
-  it('drops funds whose share falls below their minimum and redistributes', () => {
+  it('holds fewer funds rather than picking unaffordable ones', () => {
     // ₹6,000 across 4 funds is ₹1,500 each, but two funds demand ₹5,000.
+    //
+    // Selection is greedy on score and blind to money, so it used to pick the
+    // expensive funds, discover the share was short, drop them, and leave the
+    // class underfunded. Affordability is now filtered before selection: the
+    // builder works out how many funds the money supports and picks that many.
     const funds = [
       eligible('eq1', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'A', minInvestment: 500 }, 20),
       eligible('eq2', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'B', minInvestment: 500 }, 18),
@@ -203,7 +208,37 @@ describe('buildPortfolio — scheme minimums', () => {
       expect(f.amount).toBeGreaterThanOrEqual(min);
     }
     expect(result.funds.length).toBeLessThan(4);
-    expect(result.warnings.some((w) => /below the scheme minimum/i.test(w))).toBe(true);
+    // The ₹5,000-minimum funds were never candidates at a ₹1,500 share.
+    expect(result.funds.map((f) => f.fund.id)).not.toContain('eq3');
+    expect(result.funds.map((f) => f.fund.id)).not.toContain('eq4');
+    // And the money still lands rather than sitting unallocated.
+    expect(result.allocatedAmount).toBeGreaterThan(0);
+    expect(result.warnings.some((w) => /supports \d+ fund/i.test(w))).toBe(true);
+  });
+
+  it('funds a class the greedy pick would have left empty', () => {
+    // The regression this guards: one high-scoring but expensive fund used to be
+    // chosen, dropped, and the whole class left with nothing — while cheaper
+    // funds that would have taken the money went unconsidered.
+    const funds = [
+      eligible('eq-a', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'A', minInvestment: 100 }, 20),
+      eligible('eq-b', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'B', minInvestment: 100 }, 19),
+      // Top of the debt class by score, but needs far more than its share.
+      eligible('dt-pricey', { category: 'Debt', subCategory: 'Liquid Fund', fundHouse: 'C', minInvestment: 5000, riskMetrics: { risk: 'Low' } }, 30),
+      eligible('dt-cheap', { category: 'Debt', subCategory: 'Liquid Fund', fundHouse: 'D', minInvestment: 100, riskMetrics: { risk: 'Low' } }, 10),
+    ];
+
+    const result = plan(funds, {
+      totalAmount: 5_000,
+      maxRisk: 'Very High',
+      allocation: { equity: 70, debt: 30 },
+      fundCount: 4,
+    });
+
+    const debt = result.classes.find((c) => c.assetClass === 'debt')!;
+    expect(debt.funds.length).toBeGreaterThan(0);
+    expect(debt.allocatedAmount).toBeGreaterThan(0);
+    expect(debt.funds.map((f) => f.fund.id)).toContain('dt-cheap');
   });
 
   it('still reconciles after dropping funds', () => {
@@ -726,5 +761,351 @@ describe('buildPortfolio — pinned and excluded funds', () => {
     const fromSameHouse = result.funds.filter((f) => f.fund.fundHouse === pin.fundHouse);
     expect(fromSameHouse).toHaveLength(1);
     expect(fromSameHouse[0].fund.id).toBe(pin.id);
+  });
+});
+
+describe('buildPortfolio — SIP mode', () => {
+  const base = {
+    totalAmount: 5_000,
+    maxRisk: 'Very High' as const,
+    allocation: { equity: 100 },
+    fundCount: 4,
+    minTrackRecordYears: 3,
+  };
+
+  /** Lumpsum minimum high, SIP minimum low — the shape most real funds have. */
+  const sipFriendly = (id: string, sub: string, house: string, score: number) =>
+    eligible(
+      id,
+      {
+        category: 'Equity',
+        subCategory: sub,
+        fundHouse: house,
+        minInvestment: 5_000,
+        minSipInvestment: 100,
+      },
+      score,
+    );
+
+  const sipUniverse = () => [
+    sipFriendly('a', 'Large Cap Fund', 'AMC A', 20),
+    sipFriendly('b', 'Large Cap Fund', 'AMC B', 19),
+    sipFriendly('c', 'Mid Cap Fund', 'AMC C', 18),
+    sipFriendly('d', 'Mid Cap Fund', 'AMC D', 17),
+    sipFriendly('e', 'Flexi Cap Fund', 'AMC E', 16),
+    sipFriendly('f', 'Flexi Cap Fund', 'AMC F', 15),
+  ];
+
+  it('uses the SIP minimum, so a small monthly budget still splits', () => {
+    // ₹5,000 across 4 funds is ₹1,250 each — under the ₹5,000 lumpsum minimum
+    // but comfortably over the ₹100 SIP minimum. This is the whole reason mode
+    // has to reach the minimum check.
+    const funds = sipUniverse();
+
+    const asSip = plan(funds, { ...base, mode: 'sip' });
+    const asLumpsum = plan(funds, { ...base, mode: 'lumpsum' });
+
+    expect(asSip.funds).toHaveLength(4);
+    expect(asSip.allocatedAmount).toBe(5_000);
+    // The same budget as a lumpsum cannot be split at all.
+    expect(asLumpsum.funds.length).toBeLessThan(asSip.funds.length);
+  });
+
+  it('falls back to the lumpsum minimum when no SIP minimum is reported', () => {
+    // Absent means unknown, not "no minimum" — assuming zero would produce a
+    // plan that cannot be executed.
+    const funds = [
+      eligible('no-sip-min', {
+        category: 'Equity',
+        subCategory: 'Large Cap Fund',
+        fundHouse: 'AMC A',
+        minInvestment: 5_000,
+        minSipInvestment: null,
+      }),
+      sipFriendly('ok', 'Large Cap Fund', 'AMC B', 18),
+    ];
+
+    const result = plan(funds, { ...base, fundCount: 2, totalAmount: 2_000, mode: 'sip' });
+    expect(result.funds.map((f) => f.fund.id)).not.toContain('no-sip-min');
+  });
+
+  it('excludes funds that do not accept a SIP, and says how many', () => {
+    const funds = [
+      ...sipUniverse(),
+      eligible('lumpsum-only', {
+        category: 'Equity',
+        subCategory: 'Large Cap Fund',
+        fundHouse: 'AMC Z',
+        minSipInvestment: 100,
+        sipAllowed: false,
+      }, 25),
+    ];
+
+    const result = plan(funds, { ...base, mode: 'sip' });
+
+    expect(result.funds.map((f) => f.fund.id)).not.toContain('lumpsum-only');
+    expect(result.warnings.some((w) => /not accepting a SIP/.test(w))).toBe(true);
+  });
+
+  it('still allows a SIP-ineligible fund in lumpsum mode', () => {
+    const funds = [
+      eligible('lumpsum-only', {
+        category: 'Equity',
+        subCategory: 'Large Cap Fund',
+        fundHouse: 'AMC Z',
+        minInvestment: 500,
+        sipAllowed: false,
+      }, 25),
+      eligible('other', {
+        category: 'Equity',
+        subCategory: 'Large Cap Fund',
+        fundHouse: 'AMC Y',
+        minInvestment: 500,
+      }, 20),
+    ];
+
+    const result = plan(funds, {
+      ...base,
+      totalAmount: 100_000,
+      fundCount: 2,
+      mode: 'lumpsum',
+    });
+    expect(result.funds.map((f) => f.fund.id)).toContain('lumpsum-only');
+  });
+
+  it('treats an unknown sipAllowed as allowed', () => {
+    // Datasets synced before the field existed must not come back empty.
+    const funds = sipUniverse().map((f) => ({ ...f, sipAllowed: undefined }));
+    const result = plan(funds, { ...base, mode: 'sip' });
+    expect(result.funds.length).toBeGreaterThan(0);
+  });
+
+  it('warns when a pinned fund does not accept a SIP but keeps it', () => {
+    const funds = sipUniverse();
+    const pin = eligible('pinned-lumpsum-only', {
+      category: 'Equity',
+      subCategory: 'Small Cap Fund',
+      fundHouse: 'AMC Z',
+      minSipInvestment: 100,
+      sipAllowed: false,
+    });
+
+    const result = plan(funds, { ...base, mode: 'sip', pinnedFunds: [pin] });
+
+    expect(result.funds.map((f) => f.fund.id)).toContain('pinned-lumpsum-only');
+    expect(
+      result.warnings.some(
+        (w) => /pinned-lumpsum-only/.test(w) && /does not accept a SIP/.test(w),
+      ),
+    ).toBe(true);
+  });
+
+  it('rounds monthly instalments to whole hundreds', () => {
+    const funds = sipUniverse();
+    const result = plan(funds, { ...base, totalAmount: 7_000, fundCount: 3, mode: 'sip' });
+
+    for (const planned of result.funds) {
+      expect(planned.amount % 100).toBe(0);
+    }
+    expect(result.allocatedAmount).toBe(7_000);
+  });
+
+  it('defaults to lumpsum when no mode is given', () => {
+    const funds = sipUniverse();
+    const implicit = plan(funds, base);
+    const explicit = plan(funds, { ...base, mode: 'lumpsum' });
+    expect(implicit.funds.map((f) => f.fund.id)).toEqual(explicit.funds.map((f) => f.fund.id));
+  });
+});
+
+describe('buildPortfolio — per-fund floor', () => {
+  const cheapUniverse = () =>
+    ['Large Cap Fund', 'Mid Cap Fund', 'Small Cap Fund', 'Flexi Cap Fund'].flatMap((sub, i) =>
+      ['H1', 'H2'].map((house, j) =>
+        eligible(
+          `f-${i}-${j}`,
+          {
+            category: 'Equity',
+            subCategory: sub,
+            fundHouse: house,
+            minInvestment: 100,
+            minSipInvestment: 100,
+          },
+          20 - i - j,
+        ),
+      ),
+    );
+
+  const base = {
+    maxRisk: 'Very High' as const,
+    allocation: { equity: 100 },
+    minTrackRecordYears: 3,
+  };
+
+  it('is a preference, not a hard rule — callers can lower it', () => {
+    // The whole reason this is an input: someone investing ₹2,000/month should be
+    // able to opt into smaller slices rather than being capped at two funds.
+    const funds = cheapUniverse();
+
+    const strict = plan(funds, {
+      ...base,
+      totalAmount: 2_000,
+      fundCount: 4,
+      mode: 'sip',
+      minPerFund: 1_000,
+    });
+    const relaxed = plan(funds, {
+      ...base,
+      totalAmount: 2_000,
+      fundCount: 4,
+      mode: 'sip',
+      minPerFund: 500,
+    });
+
+    expect(strict.funds).toHaveLength(2);
+    expect(relaxed.funds).toHaveLength(4);
+  });
+
+  it('never places a fund below the floor', () => {
+    const funds = cheapUniverse();
+    const result = plan(funds, {
+      ...base,
+      totalAmount: 10_000,
+      fundCount: 8,
+      mode: 'sip',
+      minPerFund: 2_000,
+    });
+
+    for (const f of result.funds) expect(f.amount).toBeGreaterThanOrEqual(2_000);
+    expect(result.funds.length).toBeLessThanOrEqual(5);
+  });
+
+  it('defaults to ₹1,000 for a SIP and no floor for a lumpsum', () => {
+    const funds = cheapUniverse();
+
+    // ₹2,000 over 4 funds is ₹500 each — under the SIP default, fine as lumpsum.
+    const asSip = plan(funds, { ...base, totalAmount: 2_000, fundCount: 4, mode: 'sip' });
+    const asLumpsum = plan(funds, { ...base, totalAmount: 2_000, fundCount: 4, mode: 'lumpsum' });
+
+    expect(asSip.funds).toHaveLength(2);
+    expect(asLumpsum.funds).toHaveLength(4);
+  });
+
+  it('says our floor bound the count, not the scheme minimum', () => {
+    // The user can change one of those and not the other, so the warning has to
+    // distinguish them.
+    const funds = cheapUniverse();
+    const result = plan(funds, {
+      ...base,
+      totalAmount: 3_000,
+      fundCount: 6,
+      mode: 'sip',
+      minPerFund: 1_000,
+    });
+
+    expect(result.warnings.some((w) => /per-fund floor/.test(w))).toBe(true);
+    expect(result.warnings.some((w) => /scheme minimums, not/.test(w))).toBe(false);
+  });
+
+  it('blames scheme minimums when those are what bind', () => {
+    const pricey = ['Large Cap Fund', 'Mid Cap Fund'].flatMap((sub, i) =>
+      ['H1', 'H2'].map((house, j) =>
+        eligible(
+          `p-${i}-${j}`,
+          {
+            category: 'Equity',
+            subCategory: sub,
+            fundHouse: house,
+            minInvestment: 5_000,
+            minSipInvestment: 5_000,
+          },
+          20 - i - j,
+        ),
+      ),
+    );
+
+    const result = plan(pricey, {
+      ...base,
+      totalAmount: 10_000,
+      fundCount: 4,
+      mode: 'sip',
+      minPerFund: 0,
+    });
+
+    expect(result.warnings.some((w) => /scheme minimums/.test(w))).toBe(true);
+    expect(result.warnings.some((w) => /per-fund floor/.test(w))).toBe(false);
+  });
+
+  it('allocates nothing and explains when the budget is under the floor', () => {
+    const funds = cheapUniverse();
+    const result = plan(funds, {
+      ...base,
+      totalAmount: 500,
+      fundCount: 1,
+      mode: 'sip',
+      minPerFund: 1_000,
+    });
+
+    expect(result.funds).toHaveLength(0);
+    expect(result.unallocatedAmount).toBe(500);
+    expect(result.warnings.some((w) => /below your ₹1,000 per-fund floor/.test(w))).toBe(true);
+  });
+
+  it('treats a zero floor as no floor', () => {
+    const funds = cheapUniverse();
+    const result = plan(funds, {
+      ...base,
+      totalAmount: 800,
+      fundCount: 8,
+      mode: 'sip',
+      minPerFund: 0,
+    });
+
+    expect(result.funds.length).toBeGreaterThan(1);
+  });
+});
+
+describe('buildPortfolio — nothing allocated', () => {
+  it('names the fix when the floor blocks every class', () => {
+    // ₹1,000 a month over a 70/30 split leaves debt ₹300. The per-class warnings
+    // each explain their own shortfall, but without a synthesis the user reads
+    // three failures as a broken tool rather than one setting being too high.
+    const funds = [
+      eligible('eq-a', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'A', minSipInvestment: 100 }, 20),
+      eligible('eq-b', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'B', minSipInvestment: 100 }, 18),
+      eligible('dt-a', { category: 'Debt', subCategory: 'Liquid Fund', fundHouse: 'C', minSipInvestment: 100, riskMetrics: { risk: 'Low' } }, 8),
+      eligible('dt-b', { category: 'Debt', subCategory: 'Liquid Fund', fundHouse: 'D', minSipInvestment: 100, riskMetrics: { risk: 'Low' } }, 7),
+    ];
+
+    const result = plan(funds, {
+      totalAmount: 1_000,
+      maxRisk: 'Very High',
+      allocation: { equity: 70, debt: 30 },
+      fundCount: 6,
+      mode: 'sip',
+      minPerFund: 1_000,
+    });
+
+    expect(result.funds).toHaveLength(0);
+    expect(result.warnings.some((w) => /Lower the floor/.test(w))).toBe(true);
+  });
+
+  it('does not add the hint when a single class succeeded', () => {
+    const funds = [
+      eligible('eq-a', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'A', minSipInvestment: 100 }, 20),
+      eligible('eq-b', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'B', minSipInvestment: 100 }, 18),
+    ];
+
+    const result = plan(funds, {
+      totalAmount: 1_000,
+      maxRisk: 'Very High',
+      allocation: { equity: 100 },
+      fundCount: 1,
+      mode: 'sip',
+      minPerFund: 1_000,
+    });
+
+    expect(result.funds).toHaveLength(1);
+    expect(result.warnings.some((w) => /Lower the floor/.test(w))).toBe(false);
   });
 });

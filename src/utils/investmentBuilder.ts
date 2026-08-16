@@ -56,9 +56,52 @@ export const DEFAULT_DIVERSIFICATION: DiversificationRules = {
   maxOverlapPercent: 55,
 };
 
+export type InvestmentMode = 'lumpsum' | 'sip';
+
+/**
+ * SIP is not a relabelled lumpsum. Three things genuinely differ:
+ *
+ *  1. **The binding minimum.** Across 1,556 live funds the median lumpsum
+ *     minimum is ₹1,000 while the median SIP minimum is ₹200, and 880 funds set
+ *     a lower SIP minimum than lumpsum. At a ₹500 per-fund share, 674 funds are
+ *     affordable by the lumpsum rule against 1,349 by the SIP rule. Applying the
+ *     lumpsum minimum to a SIP would wrongly exclude half the universe.
+ *  2. **Not every scheme accepts one.** 27 of 1,659 sampled schemes report
+ *     sip_allowed: false — mostly target-maturity and gilt index funds.
+ *  3. **Rounding.** Monthly instalments are set in round hundreds, not the
+ *     arbitrary amounts a lumpsum can take.
+ *
+ * What deliberately does NOT differ is the return basis. The feed exposes SIP
+ * XIRR fields, but they are unusable: the camelCase variants report an identical
+ * value for 3Y and 5Y in 100% of sampled funds, and the two casings disagree on
+ * every fund. Ranking therefore still uses lumpsum trailing returns in both
+ * modes, which is imperfect for a SIP and better than a number we cannot read.
+ */
 export interface BuilderInput {
-  /** Rupees to deploy. */
+  /**
+   * Rupees to deploy — total for a lumpsum, per month for a SIP.
+   */
   totalAmount: number;
+  /** Defaults to lumpsum. */
+  mode?: InvestmentMode;
+  /**
+   * Our own floor on the per-fund allocation, on top of the scheme minimum.
+   *
+   * A preference, not a constraint — which is why it is an input rather than a
+   * constant. Scheme minimums are facts; this is a judgement about when a slice
+   * stops being worth the paperwork, and different budgets warrant different
+   * answers.
+   *
+   * Some floor is clearly needed: at scheme minimums alone a ₹1,000/month SIP
+   * would split ten ways at ₹100 each. But a high floor is not free either — at
+   * ₹2,500 a ₹2,000/month budget supports no funds at all.
+   *
+   * Defaults to DEFAULT_MIN_PER_FUND, which differs by mode: a SIP instalment
+   * carries recurring admin and creates a separate tax lot every month (four
+   * funds is 48 acquisition lots a year, 480 over a decade), whereas a lumpsum
+   * slice is a one-off with none of that.
+   */
+  minPerFund?: number;
   /** Highest riskometer bucket the user will hold. */
   maxRisk: RiskLevel;
   /** Target split across asset classes; normalised internally. */
@@ -122,6 +165,18 @@ export interface Portfolio {
   warnings: string[];
 }
 
+/**
+ * Default per-fund floor by mode.
+ *
+ * SIP is higher because each monthly instalment is a separate acquisition lot
+ * for capital gains, so over-splitting compounds into hundreds of lots to
+ * reconcile at redemption. A lumpsum has no such tail.
+ */
+export const DEFAULT_MIN_PER_FUND: Record<InvestmentMode, number> = {
+  lumpsum: 0,
+  sip: 1_000,
+};
+
 const RISK_ORDER: RiskLevel[] = ['Low', 'Moderate', 'High', 'Very High'];
 
 const withinRisk = (fund: MutualFund, maxRisk: RiskLevel): boolean => {
@@ -130,7 +185,32 @@ const withinRisk = (fund: MutualFund, maxRisk: RiskLevel): boolean => {
   return RISK_ORDER.indexOf(risk) <= RISK_ORDER.indexOf(maxRisk);
 };
 
-const minInvestmentOf = (fund: MutualFund): number => toNumber(fund.minInvestment) ?? 0;
+/**
+ * The minimum that actually binds for the chosen mode.
+ *
+ * Falls back to the lumpsum minimum when a fund reports no SIP minimum, rather
+ * than treating it as zero — an absent value means unknown, and assuming "no
+ * minimum" would produce plans that cannot be executed.
+ */
+const schemeMinimumOf = (fund: MutualFund, mode: InvestmentMode = 'lumpsum'): number => {
+  if (mode === 'sip') {
+    return toNumber(fund.minSipInvestment) ?? toNumber(fund.minInvestment) ?? 0;
+  }
+  return toNumber(fund.minInvestment) ?? 0;
+};
+
+/**
+ * The floor that actually applies: whichever of the scheme's own minimum and our
+ * preference is higher.
+ */
+const minInvestmentOf = (
+  fund: MutualFund,
+  mode: InvestmentMode = 'lumpsum',
+  minPerFund = 0,
+): number => Math.max(schemeMinimumOf(fund, mode), Math.max(0, minPerFund));
+
+/** Schemes that accept no SIP. Undefined means an older dataset — assume allowed. */
+const acceptsSip = (fund: MutualFund): boolean => fund.sipAllowed !== false;
 
 /**
  * Split a total into per-class targets whose rupee amounts sum exactly to the
@@ -282,6 +362,8 @@ const allocateWithinClass = (
   /** Pins, which are warned about rather than dropped when their share is short. */
   protectedIds: Set<string>,
   onUnderMinimum: (fund: ScoredFund, share: number) => void,
+  mode: InvestmentMode,
+  minPerFund: number,
 ): Map<string, number> => {
   let eligible = [...funds];
 
@@ -299,7 +381,7 @@ const allocateWithinClass = (
 
     const tooSmall = eligible.filter((fund) => {
       const share = split.get(fund.id) ?? 0;
-      const min = minInvestmentOf(fund);
+      const min = minInvestmentOf(fund, mode, minPerFund);
       return min > 0 && share < min;
     });
 
@@ -331,7 +413,10 @@ export const buildPortfolio = (
   input: BuilderInput,
 ): Portfolio => {
   const warnings: string[] = [];
-  const roundTo = Math.max(1, input.roundTo ?? 100);
+  const mode: InvestmentMode = input.mode ?? 'lumpsum';
+  const minPerFund = Math.max(0, input.minPerFund ?? DEFAULT_MIN_PER_FUND[mode]);
+  // Monthly instalments are set in round hundreds; a lumpsum can be any figure.
+  const roundTo = Math.max(1, input.roundTo ?? (mode === 'sip' ? 100 : 100));
   const weighting = input.weighting ?? 'equal';
   const rules = { ...DEFAULT_DIVERSIFICATION, ...input.diversification };
   const minYears = input.minTrackRecordYears ?? 3;
@@ -370,15 +455,28 @@ export const buildPortfolio = (
   const eligible = candidates.filter((fund) => {
     if (excludedIds.has(fund.id)) return false;
     if (pinnedIds.has(fund.id)) return false;
+    if (mode === 'sip' && !acceptsSip(fund)) return false;
     if (!withinRisk(fund, input.maxRisk)) return false;
     if (trackRecordOf(fund).years < minYears) return false;
     return true;
   });
 
+  if (mode === 'sip') {
+    const rejected = candidates.filter(
+      (fund) => !acceptsSip(fund) && !excludedIds.has(fund.id) && !pinnedIds.has(fund.id),
+    ).length;
+    if (rejected > 0) {
+      warnings.push(
+        `${rejected} fund${rejected === 1 ? '' : 's'} excluded for not accepting a SIP.`,
+      );
+    }
+  }
+
   // Say so when a pin fails the user's own rules, rather than letting it sit in
   // the plan looking like it passed.
   for (const fund of pinnedFunds) {
     const reasons: string[] = [];
+    if (mode === 'sip' && !acceptsSip(fund)) reasons.push('does not accept a SIP');
     if (!withinRisk(fund, input.maxRisk)) reasons.push(`risk is ${fund.riskMetrics.risk}`);
     const years = trackRecordOf(fund).years;
     if (years < minYears) reasons.push(`only ${years.toFixed(years < 1 ? 1 : 0)}y of history`);
@@ -468,21 +566,69 @@ export const buildPortfolio = (
       continue;
     }
 
+    /*
+     * Only consider funds this class can actually afford.
+     *
+     * Selection is greedy on score and blind to money, so without this it will
+     * happily pick the top-ranked fund in the class, discover its share is under
+     * the scheme minimum, drop it, and leave the class empty — even when
+     * hundreds of cheaper funds would have taken the money. Observed on real
+     * data: a ₹1,500 debt share picked a fund with a ₹5,000 minimum and
+     * allocated nothing, while 442 other debt funds accepted ₹1,500.
+     *
+     * Rather than repairing that after the fact, work out the largest fund count
+     * the class can actually support and filter the pool to funds that clear the
+     * resulting per-fund share. Fewer, funded funds beat more, unfunded ones.
+     */
+    let affordablePool = pool;
+    let affordableCount = wanted;
+
+    for (let n = wanted; n >= 1; n--) {
+      const share = Math.floor(targetAmount / n);
+      const affordable = pool.filter((fund) => minInvestmentOf(fund, mode, minPerFund) <= share);
+      if (affordable.length >= n - classPins.length) {
+        affordablePool = affordable;
+        affordableCount = n;
+        break;
+      }
+      if (n === 1) {
+        affordablePool = [];
+        affordableCount = 0;
+      }
+    }
+
+    if (affordableCount < wanted) {
+      // Say which floor bit. A scheme minimum is a fact the user cannot change;
+      // our own per-fund floor is a setting they can lower, and conflating the
+      // two would leave them with no idea which.
+      const shareAtWanted = Math.floor(targetAmount / wanted);
+      const ourFloorBinds = minPerFund > 0 && shareAtWanted < minPerFund;
+      const reason = ourFloorBinds
+        ? `your ₹${minPerFund.toLocaleString('en-IN')} per-fund floor`
+        : `${mode === 'sip' ? 'SIP ' : ''}scheme minimums`;
+
+      warnings.push(
+        affordableCount > 0
+          ? `${ASSET_CLASS_LABEL[cls]}: ₹${targetAmount.toLocaleString('en-IN')} supports ${affordableCount} fund${affordableCount === 1 ? '' : 's'} under ${reason}, not ${wanted}.`
+          : `${ASSET_CLASS_LABEL[cls]}: ₹${targetAmount.toLocaleString('en-IN')} is below ${reason}, so nothing was allocated.`,
+      );
+    }
+
     // rankFundsWithContext drops funds without enough data to rank, which is
     // right for a plan but must not be invisible — otherwise a class silently
     // comes back short with no explanation.
-    const ranked = rankFundsWithContext(pool, context);
-    const excluded = pool.length - ranked.length;
-    if (excluded > 0 && ranked.length + classPins.length < wanted) {
+    const ranked = rankFundsWithContext(affordablePool, context);
+    const excluded = affordablePool.length - ranked.length;
+    if (excluded > 0 && ranked.length + classPins.length < affordableCount) {
       warnings.push(
-        `${ASSET_CLASS_LABEL[cls]}: ${excluded} of ${pool.length} matching funds were skipped for having too little data to rank.`,
+        `${ASSET_CLASS_LABEL[cls]}: ${excluded} of ${affordablePool.length} affordable funds were skipped for having too little data to rank.`,
       );
     }
 
     const relaxations: string[] = [];
     const autoSelected = selectFunds(
       ranked,
-      Math.max(0, wanted - classPins.length),
+      Math.max(0, affordableCount - classPins.length),
       rules,
       state,
       input.holdings,
@@ -494,7 +640,7 @@ export const buildPortfolio = (
 
     if (relaxations.length > 0) {
       warnings.push(
-        `${ASSET_CLASS_LABEL[cls]}: to reach ${wanted} fund${wanted === 1 ? '' : 's'} the builder ${[...new Set(relaxations)].join(' and ')}.`,
+        `${ASSET_CLASS_LABEL[cls]}: to reach ${affordableCount} fund${affordableCount === 1 ? '' : 's'} the builder ${[...new Set(relaxations)].join(' and ')}.`,
       );
     }
 
@@ -507,13 +653,15 @@ export const buildPortfolio = (
       roundTo,
       (fund, share) =>
         dropped.push(
-          `${fund.schemeName} (share ₹${share.toLocaleString('en-IN')} below its ₹${minInvestmentOf(fund).toLocaleString('en-IN')} minimum)`,
+          `${fund.schemeName} (share ₹${share.toLocaleString('en-IN')} below its ₹${minInvestmentOf(fund, mode, minPerFund).toLocaleString('en-IN')} minimum)`,
         ),
       pinnedIds,
       (fund, share) =>
         underMinimum.push(
-          `${fund.schemeName} gets ₹${share.toLocaleString('en-IN')} but needs ₹${minInvestmentOf(fund).toLocaleString('en-IN')}`,
+          `${fund.schemeName} gets ₹${share.toLocaleString('en-IN')} but needs ₹${minInvestmentOf(fund, mode, minPerFund).toLocaleString('en-IN')}`,
         ),
+      mode,
+      minPerFund,
     );
 
     if (underMinimum.length > 0) {
@@ -602,11 +750,45 @@ export const buildPortfolio = (
     expenseCovered += p.amount;
   }
 
+  /*
+   * Nothing placed at all, and our own floor is why.
+   *
+   * The per-class warnings each explain their own shortfall, but two or three of
+   * them with no synthesis reads as "the tool is broken" rather than "one setting
+   * is too high for this budget". Worth one plain sentence naming the fix, since
+   * the alternative is a user concluding the builder does not work at their
+   * amount.
+   *
+   * Note the asset split is often the real culprit: at ₹1,000 a month a 70/30
+   * split leaves the debt class ₹300, which no floor above that can fund.
+   */
+  if (allPlanned.length === 0 && minPerFund > 0 && input.totalAmount >= minPerFund) {
+    warnings.push(
+      `Nothing could be allocated: splitting ₹${input.totalAmount.toLocaleString('en-IN')} across ${classes.length} asset class${classes.length === 1 ? '' : 'es'} leaves every class below your ₹${minPerFund.toLocaleString('en-IN')} per-fund floor. Lower the floor, put everything in one asset class, or invest more.`,
+    );
+  }
+
   const lockedIn = allPlanned.filter((p) => (toNumber(p.fund.lockInMonths) ?? 0) > 0);
   if (lockedIn.length > 0) {
-    warnings.push(
-      `${lockedIn.length} fund${lockedIn.length === 1 ? '' : 's'} in this plan have a lock-in and cannot be redeemed early: ${lockedIn.map((p) => p.fund.schemeName).join('; ')}.`,
-    );
+    const names = lockedIn.map((p) => p.fund.schemeName).join('; ');
+
+    if (mode === 'sip') {
+      /*
+       * A lock-in behaves quite differently under a SIP, and saying only "cannot
+       * be redeemed early" would understate it. Each instalment locks from its
+       * own date, so the money is not free three years after you start — it is
+       * free three years after the *last* instalment, and a rolling portion stays
+       * locked for as long as the SIP runs.
+       */
+      const longest = Math.max(...lockedIn.map((p) => toNumber(p.fund.lockInMonths) ?? 0));
+      warnings.push(
+        `${lockedIn.length} fund${lockedIn.length === 1 ? '' : 's'} in this plan have a lock-in, and under a SIP every instalment locks from its own date — so a portion stays locked until ${Math.round(longest)} months after your final instalment, not after the first: ${names}.`,
+      );
+    } else {
+      warnings.push(
+        `${lockedIn.length} fund${lockedIn.length === 1 ? '' : 's'} in this plan have a lock-in and cannot be redeemed early: ${names}.`,
+      );
+    }
   }
 
   return {

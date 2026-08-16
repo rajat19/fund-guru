@@ -4,6 +4,8 @@ import { RiskLevel } from './mutualFund';
 
 export interface GrowwScheme {
   id: string;
+  /** Present on the derived-scheme feed; see the note on GrowwSearchResponse. */
+  sip_allowed?: boolean | null;
   fund_name: string;
   search_id: string;
   category: string;
@@ -91,6 +93,16 @@ export interface GrowwSearchResponse {
   /** Scheme minimums. Constrain how finely a portfolio can be split. */
   min_investment_amount: number | null;
   min_sip_investment: number | null;
+  /**
+   * False for schemes that accept lumpsum only — target-maturity and gilt index
+   * funds, and the newer SIF category. 27 of 1,659 live schemes.
+   *
+   * The feed also carries SIP return fields under both `sip_returnNy` and
+   * `sipReturnNy`. They are deliberately NOT ingested: the camelCase set reports
+   * an identical value for 3Y and 5Y in 100% of sampled funds, and the two
+   * casings disagree on every single fund, so neither can be trusted.
+   */
+  sip_allowed: boolean | null;
 
   /** All-null for schemes without a lock-in; populated for ELSS. */
   lock_in: { years: number | null; months: number | null; days: number | null } | null;

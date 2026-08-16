@@ -36,6 +36,12 @@ export interface MutualFund {
    */
   minInvestment?: number | null;
   minSipInvestment?: number | null;
+  /**
+   * Whether the scheme accepts a SIP at all. Undefined on datasets synced before
+   * this field existed, which is treated as "allowed" so an old file does not
+   * empty the SIP builder.
+   */
+  sipAllowed?: boolean | null;
   /** Lock-in in months. Non-zero for ELSS and a few closed-ended schemes. */
   lockInMonths?: number | null;
   /** Index the scheme measures itself against. */

@@ -30,7 +30,11 @@ import {
   type AssetAllocation,
   type AssetClass,
 } from '@/utils/assetClass';
-import { buildPortfolio } from '@/utils/investmentBuilder';
+import {
+  buildPortfolio,
+  DEFAULT_MIN_PER_FUND,
+  type InvestmentMode,
+} from '@/utils/investmentBuilder';
 import { describeOverlap } from '@/utils/overlap';
 import { TRACK_RECORD_PRESETS } from '@/utils/trackRecord';
 import { formatCurrency, formatPercent } from '@/utils/format';
@@ -40,9 +44,16 @@ import { MetricInfoTip } from '@/components/MetricInfoTip';
 
 const RISK_LEVELS: RiskLevel[] = ['Low', 'Moderate', 'High', 'Very High'];
 
+const MODE_DEFAULT_AMOUNT: Record<InvestmentMode, number> = {
+  lumpsum: 500_000,
+  sip: 10_000,
+};
+
 export default function Builder() {
   const navigate = useNavigate();
 
+  const [mode, setMode] = useState<InvestmentMode>('lumpsum');
+  const [minPerFund, setMinPerFund] = useState(DEFAULT_MIN_PER_FUND.lumpsum);
   const [amount, setAmount] = useState(500_000);
   const [fundCount, setFundCount] = useState(6);
   const [maxRisk, setMaxRisk] = useState<RiskLevel>('Very High');
@@ -95,6 +106,29 @@ export default function Builder() {
 
   const restoreAll = () => setExcludedIds([]);
 
+  /**
+   * Swap the amount to a sensible default for the new mode.
+   *
+   * ₹5L as a monthly SIP, or ₹5,000 as a lumpsum, are both nonsense — carrying
+   * the figure across would make the plan look broken rather than different.
+   * Only replaces the amount if it is still the other mode's default, so a
+   * deliberately typed figure survives the toggle.
+   */
+  const changeMode = (next: InvestmentMode) => {
+    setMode((prev) => {
+      if (prev === next) return prev;
+      setAmount((current) =>
+        current === MODE_DEFAULT_AMOUNT[prev] ? MODE_DEFAULT_AMOUNT[next] : current,
+      );
+      setMinPerFund((current) =>
+        current === DEFAULT_MIN_PER_FUND[prev] ? DEFAULT_MIN_PER_FUND[next] : current,
+      );
+      return next;
+    });
+  };
+
+  const perMonth = mode === 'sip';
+
   const portfolio = useMemo(
     () =>
       buildPortfolio(candidates, context, {
@@ -107,6 +141,8 @@ export default function Builder() {
         holdings,
         pinnedFunds,
         excludedIds,
+        mode,
+        minPerFund,
       }),
     [
       candidates,
@@ -120,6 +156,8 @@ export default function Builder() {
       holdings,
       pinnedFunds,
       excludedIds,
+      mode,
+      minPerFund,
     ],
   );
 
@@ -139,7 +177,7 @@ export default function Builder() {
               Investment Builder
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Set your rules and a target split, and this divides an amount across specific funds —
+              Set your rules and a target split, and this divides {perMonth ? 'a monthly amount' : 'an amount'} across specific funds —
               respecting scheme minimums and avoiding funds that hold the same things. Arithmetic
               over public data, not advice.
             </p>
@@ -148,8 +186,29 @@ export default function Builder() {
           <CardContent className="space-y-8">
             {/* Amount and shape */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Lumpsum vs SIP. Changes which scheme minimum binds and which
+                  funds are even eligible, not just the wording. */}
               <div className="space-y-2">
-                <Label htmlFor="amount">Amount to invest</Label>
+                <Label>How are you investing?</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['lumpsum', 'sip'] as const).map((option) => (
+                    <Button
+                      key={option}
+                      type="button"
+                      variant={mode === option ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => changeMode(option)}
+                    >
+                      {option === 'lumpsum' ? 'One-off lumpsum' : 'Monthly SIP'}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="amount">
+                  {perMonth ? 'Amount per month' : 'Amount to invest'}
+                </Label>
                 <NumericInput
                   id="amount"
                   min={0}
@@ -160,7 +219,39 @@ export default function Builder() {
                   emptyValue={0}
                   onValueChange={(next) => setAmount(next ?? 0)}
                 />
-                <p className="text-xs text-muted-foreground">{formatCurrency(amount)}</p>
+                <p className="text-xs text-muted-foreground">
+                  {formatCurrency(amount)}
+                  {perMonth && <> per month · {formatCurrency(amount * 12)} a year</>}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="min-per-fund">Minimum per fund</Label>
+                <NumericInput
+                  id="min-per-fund"
+                  min={0}
+                  step={500}
+                  value={minPerFund}
+                  emptyValue={0}
+                  onValueChange={(next) => setMinPerFund(next ?? 0)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {minPerFund > 0 ? (
+                    <>
+                      Our floor, on top of each scheme&apos;s own minimum. Lower it for smaller
+                      slices, raise it to hold fewer funds.
+                      {perMonth && (
+                        <>
+                          {' '}
+                          Every monthly instalment is a separate tax lot, so more funds means more
+                          to reconcile later.
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <>Only scheme minimums apply. A small amount may split very thinly.</>
+                  )}
+                </p>
               </div>
 
               {/* Manual picks. Searches the whole universe, not the filtered set. */}
@@ -381,6 +472,7 @@ export default function Builder() {
                   <span>
                     <span className="text-muted-foreground">Allocated </span>
                     <strong>{formatCurrency(portfolio.allocatedAmount)}</strong>
+                    {perMonth && <span className="text-muted-foreground"> / month</span>}
                   </span>
                   {portfolio.weightedExpenseRatio != null && (
                     <span>
