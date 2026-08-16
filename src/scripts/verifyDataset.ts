@@ -155,6 +155,22 @@ async function main() {
     );
   }
 
+  // SIP mode binds on the SIP minimum, which is roughly 5x lower than the
+  // lumpsum one, and on sip_allowed to skip the ~27 lumpsum-only schemes.
+  const withSipMinimum = parsed.funds.filter((fund) => fund.minSipInvestment != null).length;
+  if (withSipMinimum === 0) {
+    console.warn(
+      '⚠️ No fund reports a SIP minimum. The SIP builder will fall back to lumpsum minimums, which are far higher — re-run `pnpm sync:data`.',
+    );
+  }
+
+  const withSipAllowed = parsed.funds.filter((fund) => fund.sipAllowed != null).length;
+  if (withSipAllowed === 0) {
+    console.warn(
+      '⚠️ No fund reports whether it accepts a SIP. Lumpsum-only schemes will not be filtered out of SIP plans — re-run `pnpm sync:data`.',
+    );
+  }
+
   await verifyHoldings(parsed.funds.length);
 
   const sizeMb = Buffer.byteLength(raw) / 1024 / 1024;

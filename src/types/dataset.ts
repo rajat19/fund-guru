@@ -18,7 +18,7 @@ export interface FundDataset {
   funds: MutualFund[];
 }
 
-export const DATASET_SCHEMA_VERSION = 3;
+export const DATASET_SCHEMA_VERSION = 4;
 
 /** Path relative to the Vite base, so it works under /fund-guru/ on Pages. */
 export const DATASET_PATH = 'data/funds.json';

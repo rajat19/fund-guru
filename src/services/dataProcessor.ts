@@ -170,6 +170,7 @@ export const processSchemeData = (
     exitLoad: searchData?.exit_load || null,
     minInvestment: searchData?.min_investment_amount ?? null,
     minSipInvestment: searchData?.min_sip_investment ?? null,
+    sipAllowed: scheme.sip_allowed ?? searchData?.sip_allowed ?? null,
     lockInMonths: lockInToMonths(searchData?.lock_in),
     benchmarkName: searchData?.benchmark_name ?? null,
     
