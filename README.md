@@ -160,6 +160,33 @@ funds (775/775), and the two casings disagree on **every** fund (0/769 agree).
 Ranking therefore uses lumpsum trailing returns in both modes — imperfect for a
 SIP, and better than a number that cannot be read.
 
+### Minimum per fund — a default, not a rule
+
+Scheme minimums are facts; a floor on how small a slice is worth holding is an
+opinion, so it is an adjustable input (`minPerFund`) rather than a constant.
+
+Some floor is needed — at scheme minimums alone a ₹1,000/month SIP splits ten ways
+at ₹100 each. But a hard floor has real cost. Measured on the live universe, funds
+placed and smallest slice for a 70/30 SIP at `fundCount: 6`:
+
+| Monthly | No floor | ₹500 | ₹1,000 (SIP default) |
+| --- | --- | --- | --- |
+| ₹1,000 | 6 / ₹100 | 1 / ₹700 | 0 |
+| ₹2,000 | 6 / ₹300 | 3 / ₹600 | 1 / ₹1,400 |
+| ₹5,000 | 6 / ₹700 | 6 / ₹700 | 4 / ₹1,100 |
+| ₹25,000 | 6 / ₹3,700 | 6 / ₹3,700 | 6 / ₹3,700 |
+
+Defaults are **₹1,000 for a SIP and none for a lumpsum**. They differ because
+every SIP instalment is a separate acquisition lot for capital gains — four funds
+is 48 lots a year and 480 over a decade — whereas a lumpsum slice is a one-off
+with no such tail.
+
+Warnings distinguish *which* limit bound the fund count, since one is changeable
+and the other is not: "supports 2 funds under your ₹1,000 per-fund floor" versus
+"under SIP scheme minimums". And when the floor blocks every class — which a 70/30
+split at ₹1,000/month does, leaving debt ₹300 — a single plain sentence names the
+three ways out rather than leaving the user with several unexplained shortfalls.
+
 ### Affordability before selection
 
 Fund selection is greedy on score and blind to money, which used to produce

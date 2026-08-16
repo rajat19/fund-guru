@@ -30,7 +30,11 @@ import {
   type AssetAllocation,
   type AssetClass,
 } from '@/utils/assetClass';
-import { buildPortfolio, type InvestmentMode } from '@/utils/investmentBuilder';
+import {
+  buildPortfolio,
+  DEFAULT_MIN_PER_FUND,
+  type InvestmentMode,
+} from '@/utils/investmentBuilder';
 import { describeOverlap } from '@/utils/overlap';
 import { TRACK_RECORD_PRESETS } from '@/utils/trackRecord';
 import { formatCurrency, formatPercent } from '@/utils/format';
@@ -49,6 +53,7 @@ export default function Builder() {
   const navigate = useNavigate();
 
   const [mode, setMode] = useState<InvestmentMode>('lumpsum');
+  const [minPerFund, setMinPerFund] = useState(DEFAULT_MIN_PER_FUND.lumpsum);
   const [amount, setAmount] = useState(500_000);
   const [fundCount, setFundCount] = useState(6);
   const [maxRisk, setMaxRisk] = useState<RiskLevel>('Very High');
@@ -115,6 +120,9 @@ export default function Builder() {
       setAmount((current) =>
         current === MODE_DEFAULT_AMOUNT[prev] ? MODE_DEFAULT_AMOUNT[next] : current,
       );
+      setMinPerFund((current) =>
+        current === DEFAULT_MIN_PER_FUND[prev] ? DEFAULT_MIN_PER_FUND[next] : current,
+      );
       return next;
     });
   };
@@ -134,6 +142,7 @@ export default function Builder() {
         pinnedFunds,
         excludedIds,
         mode,
+        minPerFund,
       }),
     [
       candidates,
@@ -148,6 +157,7 @@ export default function Builder() {
       pinnedFunds,
       excludedIds,
       mode,
+      minPerFund,
     ],
   );
 
@@ -212,6 +222,35 @@ export default function Builder() {
                 <p className="text-xs text-muted-foreground">
                   {formatCurrency(amount)}
                   {perMonth && <> per month · {formatCurrency(amount * 12)} a year</>}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="min-per-fund">Minimum per fund</Label>
+                <NumericInput
+                  id="min-per-fund"
+                  min={0}
+                  step={500}
+                  value={minPerFund}
+                  emptyValue={0}
+                  onValueChange={(next) => setMinPerFund(next ?? 0)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {minPerFund > 0 ? (
+                    <>
+                      Our floor, on top of each scheme&apos;s own minimum. Lower it for smaller
+                      slices, raise it to hold fewer funds.
+                      {perMonth && (
+                        <>
+                          {' '}
+                          Every monthly instalment is a separate tax lot, so more funds means more
+                          to reconcile later.
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <>Only scheme minimums apply. A small amount may split very thinly.</>
+                  )}
                 </p>
               </div>
 
