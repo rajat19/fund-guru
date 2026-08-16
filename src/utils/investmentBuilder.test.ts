@@ -917,3 +917,195 @@ describe('buildPortfolio — SIP mode', () => {
     expect(implicit.funds.map((f) => f.fund.id)).toEqual(explicit.funds.map((f) => f.fund.id));
   });
 });
+
+describe('buildPortfolio — per-fund floor', () => {
+  const cheapUniverse = () =>
+    ['Large Cap Fund', 'Mid Cap Fund', 'Small Cap Fund', 'Flexi Cap Fund'].flatMap((sub, i) =>
+      ['H1', 'H2'].map((house, j) =>
+        eligible(
+          `f-${i}-${j}`,
+          {
+            category: 'Equity',
+            subCategory: sub,
+            fundHouse: house,
+            minInvestment: 100,
+            minSipInvestment: 100,
+          },
+          20 - i - j,
+        ),
+      ),
+    );
+
+  const base = {
+    maxRisk: 'Very High' as const,
+    allocation: { equity: 100 },
+    minTrackRecordYears: 3,
+  };
+
+  it('is a preference, not a hard rule — callers can lower it', () => {
+    // The whole reason this is an input: someone investing ₹2,000/month should be
+    // able to opt into smaller slices rather than being capped at two funds.
+    const funds = cheapUniverse();
+
+    const strict = plan(funds, {
+      ...base,
+      totalAmount: 2_000,
+      fundCount: 4,
+      mode: 'sip',
+      minPerFund: 1_000,
+    });
+    const relaxed = plan(funds, {
+      ...base,
+      totalAmount: 2_000,
+      fundCount: 4,
+      mode: 'sip',
+      minPerFund: 500,
+    });
+
+    expect(strict.funds).toHaveLength(2);
+    expect(relaxed.funds).toHaveLength(4);
+  });
+
+  it('never places a fund below the floor', () => {
+    const funds = cheapUniverse();
+    const result = plan(funds, {
+      ...base,
+      totalAmount: 10_000,
+      fundCount: 8,
+      mode: 'sip',
+      minPerFund: 2_000,
+    });
+
+    for (const f of result.funds) expect(f.amount).toBeGreaterThanOrEqual(2_000);
+    expect(result.funds.length).toBeLessThanOrEqual(5);
+  });
+
+  it('defaults to ₹1,000 for a SIP and no floor for a lumpsum', () => {
+    const funds = cheapUniverse();
+
+    // ₹2,000 over 4 funds is ₹500 each — under the SIP default, fine as lumpsum.
+    const asSip = plan(funds, { ...base, totalAmount: 2_000, fundCount: 4, mode: 'sip' });
+    const asLumpsum = plan(funds, { ...base, totalAmount: 2_000, fundCount: 4, mode: 'lumpsum' });
+
+    expect(asSip.funds).toHaveLength(2);
+    expect(asLumpsum.funds).toHaveLength(4);
+  });
+
+  it('says our floor bound the count, not the scheme minimum', () => {
+    // The user can change one of those and not the other, so the warning has to
+    // distinguish them.
+    const funds = cheapUniverse();
+    const result = plan(funds, {
+      ...base,
+      totalAmount: 3_000,
+      fundCount: 6,
+      mode: 'sip',
+      minPerFund: 1_000,
+    });
+
+    expect(result.warnings.some((w) => /per-fund floor/.test(w))).toBe(true);
+    expect(result.warnings.some((w) => /scheme minimums, not/.test(w))).toBe(false);
+  });
+
+  it('blames scheme minimums when those are what bind', () => {
+    const pricey = ['Large Cap Fund', 'Mid Cap Fund'].flatMap((sub, i) =>
+      ['H1', 'H2'].map((house, j) =>
+        eligible(
+          `p-${i}-${j}`,
+          {
+            category: 'Equity',
+            subCategory: sub,
+            fundHouse: house,
+            minInvestment: 5_000,
+            minSipInvestment: 5_000,
+          },
+          20 - i - j,
+        ),
+      ),
+    );
+
+    const result = plan(pricey, {
+      ...base,
+      totalAmount: 10_000,
+      fundCount: 4,
+      mode: 'sip',
+      minPerFund: 0,
+    });
+
+    expect(result.warnings.some((w) => /scheme minimums/.test(w))).toBe(true);
+    expect(result.warnings.some((w) => /per-fund floor/.test(w))).toBe(false);
+  });
+
+  it('allocates nothing and explains when the budget is under the floor', () => {
+    const funds = cheapUniverse();
+    const result = plan(funds, {
+      ...base,
+      totalAmount: 500,
+      fundCount: 1,
+      mode: 'sip',
+      minPerFund: 1_000,
+    });
+
+    expect(result.funds).toHaveLength(0);
+    expect(result.unallocatedAmount).toBe(500);
+    expect(result.warnings.some((w) => /below your ₹1,000 per-fund floor/.test(w))).toBe(true);
+  });
+
+  it('treats a zero floor as no floor', () => {
+    const funds = cheapUniverse();
+    const result = plan(funds, {
+      ...base,
+      totalAmount: 800,
+      fundCount: 8,
+      mode: 'sip',
+      minPerFund: 0,
+    });
+
+    expect(result.funds.length).toBeGreaterThan(1);
+  });
+});
+
+describe('buildPortfolio — nothing allocated', () => {
+  it('names the fix when the floor blocks every class', () => {
+    // ₹1,000 a month over a 70/30 split leaves debt ₹300. The per-class warnings
+    // each explain their own shortfall, but without a synthesis the user reads
+    // three failures as a broken tool rather than one setting being too high.
+    const funds = [
+      eligible('eq-a', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'A', minSipInvestment: 100 }, 20),
+      eligible('eq-b', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'B', minSipInvestment: 100 }, 18),
+      eligible('dt-a', { category: 'Debt', subCategory: 'Liquid Fund', fundHouse: 'C', minSipInvestment: 100, riskMetrics: { risk: 'Low' } }, 8),
+      eligible('dt-b', { category: 'Debt', subCategory: 'Liquid Fund', fundHouse: 'D', minSipInvestment: 100, riskMetrics: { risk: 'Low' } }, 7),
+    ];
+
+    const result = plan(funds, {
+      totalAmount: 1_000,
+      maxRisk: 'Very High',
+      allocation: { equity: 70, debt: 30 },
+      fundCount: 6,
+      mode: 'sip',
+      minPerFund: 1_000,
+    });
+
+    expect(result.funds).toHaveLength(0);
+    expect(result.warnings.some((w) => /Lower the floor/.test(w))).toBe(true);
+  });
+
+  it('does not add the hint when a single class succeeded', () => {
+    const funds = [
+      eligible('eq-a', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'A', minSipInvestment: 100 }, 20),
+      eligible('eq-b', { category: 'Equity', subCategory: 'Large Cap Fund', fundHouse: 'B', minSipInvestment: 100 }, 18),
+    ];
+
+    const result = plan(funds, {
+      totalAmount: 1_000,
+      maxRisk: 'Very High',
+      allocation: { equity: 100 },
+      fundCount: 1,
+      mode: 'sip',
+      minPerFund: 1_000,
+    });
+
+    expect(result.funds).toHaveLength(1);
+    expect(result.warnings.some((w) => /Lower the floor/.test(w))).toBe(false);
+  });
+});

@@ -84,6 +84,24 @@ export interface BuilderInput {
   totalAmount: number;
   /** Defaults to lumpsum. */
   mode?: InvestmentMode;
+  /**
+   * Our own floor on the per-fund allocation, on top of the scheme minimum.
+   *
+   * A preference, not a constraint — which is why it is an input rather than a
+   * constant. Scheme minimums are facts; this is a judgement about when a slice
+   * stops being worth the paperwork, and different budgets warrant different
+   * answers.
+   *
+   * Some floor is clearly needed: at scheme minimums alone a ₹1,000/month SIP
+   * would split ten ways at ₹100 each. But a high floor is not free either — at
+   * ₹2,500 a ₹2,000/month budget supports no funds at all.
+   *
+   * Defaults to DEFAULT_MIN_PER_FUND, which differs by mode: a SIP instalment
+   * carries recurring admin and creates a separate tax lot every month (four
+   * funds is 48 acquisition lots a year, 480 over a decade), whereas a lumpsum
+   * slice is a one-off with none of that.
+   */
+  minPerFund?: number;
   /** Highest riskometer bucket the user will hold. */
   maxRisk: RiskLevel;
   /** Target split across asset classes; normalised internally. */
@@ -147,6 +165,18 @@ export interface Portfolio {
   warnings: string[];
 }
 
+/**
+ * Default per-fund floor by mode.
+ *
+ * SIP is higher because each monthly instalment is a separate acquisition lot
+ * for capital gains, so over-splitting compounds into hundreds of lots to
+ * reconcile at redemption. A lumpsum has no such tail.
+ */
+export const DEFAULT_MIN_PER_FUND: Record<InvestmentMode, number> = {
+  lumpsum: 0,
+  sip: 1_000,
+};
+
 const RISK_ORDER: RiskLevel[] = ['Low', 'Moderate', 'High', 'Very High'];
 
 const withinRisk = (fund: MutualFund, maxRisk: RiskLevel): boolean => {
@@ -162,12 +192,22 @@ const withinRisk = (fund: MutualFund, maxRisk: RiskLevel): boolean => {
  * than treating it as zero — an absent value means unknown, and assuming "no
  * minimum" would produce plans that cannot be executed.
  */
-const minInvestmentOf = (fund: MutualFund, mode: InvestmentMode = 'lumpsum'): number => {
+const schemeMinimumOf = (fund: MutualFund, mode: InvestmentMode = 'lumpsum'): number => {
   if (mode === 'sip') {
     return toNumber(fund.minSipInvestment) ?? toNumber(fund.minInvestment) ?? 0;
   }
   return toNumber(fund.minInvestment) ?? 0;
 };
+
+/**
+ * The floor that actually applies: whichever of the scheme's own minimum and our
+ * preference is higher.
+ */
+const minInvestmentOf = (
+  fund: MutualFund,
+  mode: InvestmentMode = 'lumpsum',
+  minPerFund = 0,
+): number => Math.max(schemeMinimumOf(fund, mode), Math.max(0, minPerFund));
 
 /** Schemes that accept no SIP. Undefined means an older dataset — assume allowed. */
 const acceptsSip = (fund: MutualFund): boolean => fund.sipAllowed !== false;
@@ -323,6 +363,7 @@ const allocateWithinClass = (
   protectedIds: Set<string>,
   onUnderMinimum: (fund: ScoredFund, share: number) => void,
   mode: InvestmentMode,
+  minPerFund: number,
 ): Map<string, number> => {
   let eligible = [...funds];
 
@@ -340,7 +381,7 @@ const allocateWithinClass = (
 
     const tooSmall = eligible.filter((fund) => {
       const share = split.get(fund.id) ?? 0;
-      const min = minInvestmentOf(fund, mode);
+      const min = minInvestmentOf(fund, mode, minPerFund);
       return min > 0 && share < min;
     });
 
@@ -373,6 +414,7 @@ export const buildPortfolio = (
 ): Portfolio => {
   const warnings: string[] = [];
   const mode: InvestmentMode = input.mode ?? 'lumpsum';
+  const minPerFund = Math.max(0, input.minPerFund ?? DEFAULT_MIN_PER_FUND[mode]);
   // Monthly instalments are set in round hundreds; a lumpsum can be any figure.
   const roundTo = Math.max(1, input.roundTo ?? (mode === 'sip' ? 100 : 100));
   const weighting = input.weighting ?? 'equal';
@@ -543,7 +585,7 @@ export const buildPortfolio = (
 
     for (let n = wanted; n >= 1; n--) {
       const share = Math.floor(targetAmount / n);
-      const affordable = pool.filter((fund) => minInvestmentOf(fund, mode) <= share);
+      const affordable = pool.filter((fund) => minInvestmentOf(fund, mode, minPerFund) <= share);
       if (affordable.length >= n - classPins.length) {
         affordablePool = affordable;
         affordableCount = n;
@@ -555,9 +597,20 @@ export const buildPortfolio = (
       }
     }
 
-    if (affordableCount < wanted && affordableCount > 0) {
+    if (affordableCount < wanted) {
+      // Say which floor bit. A scheme minimum is a fact the user cannot change;
+      // our own per-fund floor is a setting they can lower, and conflating the
+      // two would leave them with no idea which.
+      const shareAtWanted = Math.floor(targetAmount / wanted);
+      const ourFloorBinds = minPerFund > 0 && shareAtWanted < minPerFund;
+      const reason = ourFloorBinds
+        ? `your ₹${minPerFund.toLocaleString('en-IN')} per-fund floor`
+        : `${mode === 'sip' ? 'SIP ' : ''}scheme minimums`;
+
       warnings.push(
-        `${ASSET_CLASS_LABEL[cls]}: ₹${targetAmount.toLocaleString('en-IN')} supports ${affordableCount} fund${affordableCount === 1 ? '' : 's'} at${mode === 'sip' ? ' SIP' : ''} scheme minimums, not ${wanted}.`,
+        affordableCount > 0
+          ? `${ASSET_CLASS_LABEL[cls]}: ₹${targetAmount.toLocaleString('en-IN')} supports ${affordableCount} fund${affordableCount === 1 ? '' : 's'} under ${reason}, not ${wanted}.`
+          : `${ASSET_CLASS_LABEL[cls]}: ₹${targetAmount.toLocaleString('en-IN')} is below ${reason}, so nothing was allocated.`,
       );
     }
 
@@ -600,14 +653,15 @@ export const buildPortfolio = (
       roundTo,
       (fund, share) =>
         dropped.push(
-          `${fund.schemeName} (share ₹${share.toLocaleString('en-IN')} below its ₹${minInvestmentOf(fund, mode).toLocaleString('en-IN')} minimum)`,
+          `${fund.schemeName} (share ₹${share.toLocaleString('en-IN')} below its ₹${minInvestmentOf(fund, mode, minPerFund).toLocaleString('en-IN')} minimum)`,
         ),
       pinnedIds,
       (fund, share) =>
         underMinimum.push(
-          `${fund.schemeName} gets ₹${share.toLocaleString('en-IN')} but needs ₹${minInvestmentOf(fund, mode).toLocaleString('en-IN')}`,
+          `${fund.schemeName} gets ₹${share.toLocaleString('en-IN')} but needs ₹${minInvestmentOf(fund, mode, minPerFund).toLocaleString('en-IN')}`,
         ),
       mode,
+      minPerFund,
     );
 
     if (underMinimum.length > 0) {
@@ -694,6 +748,24 @@ export const buildPortfolio = (
     if (er == null) continue;
     expenseWeighted += er * p.amount;
     expenseCovered += p.amount;
+  }
+
+  /*
+   * Nothing placed at all, and our own floor is why.
+   *
+   * The per-class warnings each explain their own shortfall, but two or three of
+   * them with no synthesis reads as "the tool is broken" rather than "one setting
+   * is too high for this budget". Worth one plain sentence naming the fix, since
+   * the alternative is a user concluding the builder does not work at their
+   * amount.
+   *
+   * Note the asset split is often the real culprit: at ₹1,000 a month a 70/30
+   * split leaves the debt class ₹300, which no floor above that can fund.
+   */
+  if (allPlanned.length === 0 && minPerFund > 0 && input.totalAmount >= minPerFund) {
+    warnings.push(
+      `Nothing could be allocated: splitting ₹${input.totalAmount.toLocaleString('en-IN')} across ${classes.length} asset class${classes.length === 1 ? '' : 'es'} leaves every class below your ₹${minPerFund.toLocaleString('en-IN')} per-fund floor. Lower the floor, put everything in one asset class, or invest more.`,
+    );
   }
 
   const lockedIn = allPlanned.filter((p) => (toNumber(p.fund.lockInMonths) ?? 0) > 0);
