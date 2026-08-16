@@ -19,7 +19,7 @@ returns, cost, and risk-adjusted metrics, and shows what tax treatment does to t
 | **Tax layer** | ✅ Working | Bucket classification from allocation, holding-period thresholds, approximate post-tax returns. |
 | **Redemption calculator** | ✅ Working | Amount + holding-period slider → value after exit load and capital gains tax. See [below](#redemption-calculator). |
 | **Track record filter** | ✅ Working | Minimum-history gate, defaulted to 3y. See [below](#track-record--filtering-out-new-funds). |
-| **Investment Builder** | ✅ Working | Rules + amount + risk + asset split → per-fund allocation, overlap-aware. See [below](#investment-builder). |
+| **Investment Builder** | ✅ Working | Rules + amount + risk + asset split → per-fund allocation, overlap-aware. Lumpsum or monthly SIP. See [below](#investment-builder). |
 | **Dashboard** | ✅ Working | Universe stats, top 3 per category, shortlist filtered by riskometer band. |
 | **Data sync** | ✅ Working | Local CLI only — see [Data pipeline](#data-pipeline). |
 | **Auth** | ✅ Working | Google sign-in; admin gated by Firestore rules. |
@@ -132,6 +132,46 @@ warnings rather than silently applied.
 Overlap needs [`holdings.json`](#data-pipeline); without it the builder falls back to sub-category and
 AMC diversification and says so on screen. Overlap for an unknown pair is `null`, never `0` —
 "we don't know" and "these share nothing" are opposite conclusions.
+
+### Lumpsum vs SIP
+
+The builder runs in either mode, and SIP is not a relabelled lumpsum — three
+things genuinely differ:
+
+**The binding minimum.** Across 1,556 live funds the median lumpsum minimum is
+₹1,000 while the median SIP minimum is ₹200, and 880 funds set a lower SIP
+minimum than lumpsum. At a ₹500 per-fund share, 674 funds are affordable by the
+lumpsum rule against **1,349** by the SIP rule. Applying the lumpsum minimum to a
+SIP would wrongly exclude half the universe.
+
+**Not every scheme accepts one.** 27 of 1,659 sampled schemes report
+`sip_allowed: false` — mostly target-maturity and gilt index funds, plus the newer
+SIF category. SIP mode filters them out and says how many.
+
+**Lock-in means something different.** Under a SIP every instalment locks from its
+own date, so an ELSS holding is not free three years after you start — a rolling
+portion stays locked until three years after your *final* instalment. The warning
+says so in SIP mode.
+
+What deliberately does **not** differ is the return basis. The feed exposes SIP
+XIRR under both `sip_returnNy` and `sipReturnNy`, and neither is usable: the
+camelCase set reports an identical value for 3Y and 5Y in **100%** of sampled
+funds (775/775), and the two casings disagree on **every** fund (0/769 agree).
+Ranking therefore uses lumpsum trailing returns in both modes — imperfect for a
+SIP, and better than a number that cannot be read.
+
+### Affordability before selection
+
+Fund selection is greedy on score and blind to money, which used to produce
+underfunded classes. Observed on real data: a ₹1,500 debt share picked the
+top-scoring debt fund, found it needed ₹5,000, dropped it, and left the class with
+**nothing** — while 442 other debt funds would have accepted ₹1,500.
+
+So the builder now works out the largest fund count each class can support at
+scheme minimums, and filters the pool to funds that clear the resulting per-fund
+share, before ranking. Fewer funded funds beat more unfunded ones. On a
+₹3,000/month SIP this is the difference between 30% of the money sitting
+unallocated and all of it being placed.
 
 ### Stock-level holdings
 
