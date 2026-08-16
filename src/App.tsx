@@ -11,6 +11,7 @@ import { FundExplorer } from '@/components/FundExplorer';
 import { SIPTracker } from '@/components/SIPTracker';
 import FundDetail from './pages/FundDetail';
 import Builder from './pages/Builder';
+import Evaluate from './pages/Evaluate';
 import Profile from './pages/Profile';
 import SIPManagement from './pages/SIPManagement';
 import Portfolio from './pages/Portfolio';
@@ -35,6 +36,8 @@ const App = () => (
               <Route path="/" element={<Dashboard />} />
               <Route path="/explorer" element={<FundExplorer />} />
               <Route path="/builder" element={<Builder />} />
+              {/* Public on purpose: signing in only adds the ability to save. */}
+              <Route path="/evaluate" element={<Evaluate />} />
               <Route path="/fund/:id" element={<FundDetail />} />
               <Route element={<ProtectedRoute />}>
                 <Route path="/profile" element={<Profile />} />

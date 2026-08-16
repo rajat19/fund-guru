@@ -1,20 +1,19 @@
 /**
  * IndexedDB cache for the fund universe.
  *
- * Entries carry a written-at timestamp and a schema version. Both matter:
+ * Entries carry a written-at timestamp and the dataset build they came from.
+ * Without a TTL, a browser that loaded the app once would keep serving that
+ * snapshot forever, which is fatal for an app about current fund data; without
+ * the build identity, there would be no way to tell "same data, just older" from
+ * "actually superseded".
  *
- *  - Without a TTL, a browser that loaded the app once would keep serving that
- *    snapshot forever, which is fatal for an app about current fund data.
- *  - Without a version, a shape change to MutualFund would be read back as the
- *    old shape and quietly break rendering.
+ * There is no hand-maintained schema version. The dataset's `generatedAt`
+ * changes on every sync, which already invalidates every client.
  */
 
 const DB_NAME = 'FundGuruDB';
 const DB_VERSION = 1;
 const STORE = 'cache';
-
-/** Bump when the cached payload shape changes. Stale versions are discarded. */
-const SCHEMA_VERSION = 4;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -35,7 +34,6 @@ export const DEFAULT_TTL_MS = 7 * DAY_MS;
 export const FUNDS_CACHE_KEY = 'all_mutual_funds';
 
 interface CacheEnvelope<T> {
-  schemaVersion: number;
   cachedAt: number;
   /**
    * Identity of the upstream build this entry came from (for funds, the
@@ -46,12 +44,18 @@ interface CacheEnvelope<T> {
   data: T;
 }
 
+/**
+ * Shape guard only — there is deliberately no schema version.
+ *
+ * Cache validity comes from `version`, which holds the dataset's `generatedAt`
+ * and therefore changes on every sync. A separate version number would have to
+ * be bumped by hand and told us nothing `generatedAt` does not already.
+ *
+ * Entries written by older builds carry an extra `schemaVersion` field, which is
+ * simply ignored.
+ */
 const isEnvelope = <T>(value: unknown): value is CacheEnvelope<T> =>
-  typeof value === 'object' &&
-  value !== null &&
-  'schemaVersion' in value &&
-  'cachedAt' in value &&
-  'data' in value;
+  typeof value === 'object' && value !== null && 'cachedAt' in value && 'data' in value;
 
 const openDb = (): Promise<IDBDatabase | null> =>
   new Promise((resolve) => {
@@ -111,10 +115,6 @@ export const readLocalCache = async <T>(
     return { data: null, ageMs: null, version: null, reason: 'stale-schema' };
   }
 
-  if (raw.schemaVersion !== SCHEMA_VERSION) {
-    return { data: null, ageMs: null, version: null, reason: 'stale-schema' };
-  }
-
   const version = raw.version ?? null;
   const ageMs = Date.now() - raw.cachedAt;
   if (ageMs > ttlMs) return { data: null, ageMs, version, reason: 'expired' };
@@ -137,7 +137,6 @@ export const setLocalCache = async <T>(
   if (!db || !db.objectStoreNames.contains(STORE)) return;
 
   const envelope: CacheEnvelope<T> = {
-    schemaVersion: SCHEMA_VERSION,
     cachedAt: Date.now(),
     version,
     data,

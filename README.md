@@ -20,6 +20,7 @@ returns, cost, and risk-adjusted metrics, and shows what tax treatment does to t
 | **Redemption calculator** | ✅ Working | Amount + holding-period slider → value after exit load and capital gains tax. See [below](#redemption-calculator). |
 | **Track record filter** | ✅ Working | Minimum-history gate, defaulted to 3y. See [below](#track-record--filtering-out-new-funds). |
 | **Investment Builder** | ✅ Working | Rules + amount + risk + asset split → per-fund allocation, overlap-aware. Lumpsum or monthly SIP. See [below](#investment-builder). |
+| **Evaluate Holdings** | ✅ Working | Upload a holdings and/or SIP CSV → ranking, keep/switch/trim verdicts costed against exit load and capital gains tax, overlap, stock look-through. Works signed out; saves to Firestore only on an explicit Save. See [below](#evaluate-holdings). |
 | **Dashboard** | ✅ Working | Universe stats, top 3 per category, shortlist filtered by riskometer band. |
 | **Data sync** | ✅ Working | Local CLI only — see [Data pipeline](#data-pipeline). |
 | **Auth** | ✅ Working | Google sign-in; admin gated by Firestore rules. |
@@ -214,6 +215,132 @@ so collecting them costs no extra requests. Two notes on that data:
   same bet, and keeping them out of `funds.json` avoids making every first page load pay ~2.8 MB for a
   feature most visits never reach.
 
+## Evaluate Holdings
+
+Upload what you hold and what you are adding to each month. Either file alone is enough — they are
+independent.
+
+The builder answers "where should this money go?". This answers a harder question, because **buying
+is free and leaving is not**. A position carries an embedded gain, a capital gains clock and possibly
+an unexpired exit load, so "this fund is mediocre" is not on its own a reason to move. Three
+principles follow.
+
+### 1. Existing units and future instalments get different bars
+
+Redirecting a SIP costs nothing: no load, no tax, nothing realised — the next instalment simply goes
+elsewhere. Selling units costs real money. So the same fund can honestly warrant **"keep what you
+hold, stop adding to it"**, and holdings and SIPs are therefore evaluated separately with different
+thresholds rather than collapsed into one verdict per fund.
+
+Verdicts are `keep` / `keep for now` / `trim` / `worth switching` for holdings, and
+`continue` / `review` / `redirect` for SIPs. There is deliberately no "stop" for a SIP: stopping
+without redirecting changes how much you invest and your asset mix, which is a decision about your
+plan, and this knows nothing about your plan.
+
+### 2. A switch has to pay for itself
+
+Every "worth switching" clears two independent tests, not one:
+
+1. A fund in the same sub-category that you **do not already hold** ranks at least 15 percentile
+   points higher.
+2. The load plus tax is either negligible (≤1% of the position) or recovered by the return gap within
+   two years.
+
+Exit load reuses the [parser](#exit-load-parsing) — including the "first 10% of units are free" form,
+which a naive rate × value overstates by up to 10× — and tax reuses the one dated
+[rate table](#tax-layer), so the long-term exemption and the slab-taxed buckets behave correctly. The
+break-even figure is `cost% ÷ annual return gap`, which assumes the trailing gap persists; that is an
+assumption, not a forecast, so the verdict text always names the gap and the horizon it came from.
+
+Where the cost cannot be computed the verdict stops short rather than guessing:
+
+| Missing input | Effect |
+| --- | --- |
+| No purchase date | No exit load or capital gains figure; a laggard reads "keep for now", saying why |
+| No cost figure | Gain unknown, so the tax on a switch is unknown |
+| Debt/hybrid with no marginal rate set | Cost shown as unknown, never assumed at 30% |
+
+It also quantifies **waiting**: a holding three months short of long-term treatment reports what those
+three months save on today's gain.
+
+### 3. Peer standing excludes the risk tilt
+
+The headline peer score multiplies by a risk factor, which is right for shortlisting across the
+universe and wrong here — it would mark every small-cap holding down 10% and every liquid-fund holding
+up 10%, so your equity funds would look like laggards purely for being equity, an exposure you chose.
+So verdicts use `measuredScore`, the untilted percentile within the fund's own sub-category. Within a
+sub-category the tilt is uniform anyway, so nothing is lost.
+
+### Index funds are not judged on peer standing
+
+A tracker scored against active peers trails them whenever active managers beat the index, because
+alpha, Sharpe and information ratio are all measured against the very benchmark it replicates.
+Reporting "bottom 35% of Large Cap, 41 funds rank higher, worth switching" is the metric misapplied,
+and it would push someone out of a defensible strategy on an arithmetic artefact. (This was caught on
+real data — a Nifty 50 index fund was being flagged for exit.)
+
+So peer standing is still shown for a passive holding and never used to justify leaving it. What
+applies instead is cost: funds reporting the identical `benchmarkName` are compared on expense ratio,
+which on live data surfaces things like a 0.19% Nifty 50 fund against a 0.07% one tracking the same
+index. Duplication still counts — owning the index twice is real.
+
+### What else it reports
+
+- **Overlap between your own funds**, using the same weighted measure as the builder. Two holdings
+  above 60% shared are a duplication, and the lower-ranked half is the switch candidate.
+- **Stock look-through** — every fund's disclosed holdings weighted by the money you have in it, so
+  eight funds resolving to 72 companies with the top 10 at 25% is visible. Labelled with its coverage,
+  since only the top 20 per fund are published.
+- **Concentration** by fund and by AMC. Both are gated on having enough holdings for concentration to
+  be a *choice*: with four funds an equal split is already 25% each, so the per-fund guard requires an
+  equal split to fall below the threshold rather than flagging arithmetic as a problem.
+- **Allocation drift** against a target you pick. Unset by default — reporting drift against a
+  benchmark nobody chose would be inventing it and then judging against it. Drift is also cheaper to
+  correct with new money than by selling, and the text says so.
+- **Annual fee cost in rupees**, since a money-weighted 0.32% is abstract and "₹365 a year" is not.
+
+### Reading the file
+
+There is no standard export, so nothing about the layout is assumed. Columns are matched by name
+against an alias table (`Current Value`, `Market Value`, `Valuation`, `Present Value (₹)` all work),
+never by position, and the header row is *found* rather than assumed — real exports lead with a title,
+an account number and a blank line. `Amount` deliberately means cost in a holdings file and instalment
+in a SIP file; swapping them would report a nonsense return.
+
+Two parsing details that are easy to get silently wrong:
+
+- **`Number('')` is 0.** An empty cost cell coerced that way becomes a free holding with an infinite
+  gain, so figures parse to `null` instead. Lakh grouping (`1,23,456.78`), `₹`, `Rs.`, `/-` and the
+  accounting negative `(1,200)` are all handled.
+- **`03/04/2024` is ambiguous** and the capital gains clock turns on which reading is right. Day-first
+  is assumed, matching Indian convention, and the import *says* how many dates that applied to. Where
+  only one reading is possible (`15/04`), no assumption is reported.
+
+Scheme names are matched on token similarity with two guards: a floor below which nothing is accepted,
+and an **ambiguity check** that rejects a winner the runner-up nearly tied with — a row reading only
+"Small Cap Fund" fits two hundred schemes and must not silently resolve to whichever sorted first. It
+reports the near-miss instead ("matches Bandhan Small Cap and ITI Small Cap about equally well").
+Measured against all 1,529 real scheme names, 48/48 rewritings matched — uppercased, regular-plan,
+re-punctuated, truncated and `- Direct Plan - Growth Option` forms.
+
+Because the dataset holds direct plans only, a **regular-plan row is matched to the direct plan of the
+same scheme** and flagged: the expense ratio shown is the direct one and is lower than what you are
+paying.
+
+Every skipped row is reported with its line number, its reason and **how much money was on it** — a
+silently short import would make every percentage on the page look like it covered the whole
+portfolio.
+
+### Storage
+
+Signed out, **nothing is stored anywhere** — not on the server and not in browser storage either. This
+is somebody's whole financial position, and leaving it in localStorage on a possibly shared machine is
+a worse default than making them pick the file again. Refreshing clears it, and the page says so.
+
+Signed in, Save writes one owner-only document to `users/{uid}/holdings/snapshot` under the existing
+rules. It is written on an explicit Save only, never on import or edit, so uploading a file to look at
+something is not the same as filing it away. There is a delete, and it says what it removes.
+
 ## Track record — filtering out new funds
 
 The explorer defaults to **3 years minimum history**, because a screener aimed at long-term holdings
@@ -325,8 +452,26 @@ git add public/data/funds.json && git commit -m "chore: refresh fund data" && gi
 ```
 
 `pnpm verify:dataset` runs in CI and fails the build if the file is missing, malformed,
-schema-mismatched, or older than 45 days — so a silent fallback to Firestore becomes a red build
+or older than 45 days — so a silent fallback to Firestore becomes a red build
 instead of a surprise bill.
+
+### No dataset schema version
+
+There deliberately is not one. The published files carry `generatedAt` and nothing
+else identifying them.
+
+A hand-maintained version number was tried and removed. Every new optional field
+meant bumping it, and because both readers compared with strict equality, each
+bump broke CI and made the running app silently fall back to Firestore — at one
+read per fund per cold client — until a fresh ~4 MB sync was committed. That
+coupled every code release to a data release and told nobody anything.
+
+`generatedAt` already does the useful part: it changes on every sync, which is
+what invalidates the browser cache. And every field is optional with readers that
+handle absence, so an older file degrades rather than breaks. What CI checks
+instead is the data itself — is it a dataset envelope, does it parse, is it recent,
+do the fields the builder needs actually appear — which is both more honest and
+more useful than a number.
 
 ### Why the sync no longer writes Firestore by default
 
@@ -399,8 +544,9 @@ pnpm check
 ```
 
 Runs typecheck, lint, and tests. `pnpm test` for watch mode. Tests cover the scoring engine, tax
-classification, formatters, the cache TTL, and the Groww→model mapping. UI components and the sync
-pipeline are not unit-tested — they need integration coverage.
+classification, exit load parsing, the investment builder, holdings evaluation, CSV and statement
+parsing, scheme-name matching, formatters, the cache TTL, and the Groww→model mapping. UI components
+and the sync pipeline are not unit-tested — they need integration coverage.
 
 ## Tech stack
 
@@ -426,5 +572,7 @@ Firebase Auth + Firestore · Vitest
 1. Rewrite the SIP tracker on real persisted data; drop the continue/pause/stop verdicts.
 2. Ingest AMFI NAV history → rolling returns, max drawdown, index comparison net of expense ratio.
 3. Portfolio overlap between any two funds.
-4. Real persistence for holdings and goals (Firestore rules are already in place).
-5. Per-PAN long-term exemption headroom tracking across multiple accounts.
+4. Real persistence for goals. Holdings are done — see [Evaluate Holdings](#evaluate-holdings).
+5. Per-PAN long-term exemption headroom tracking across multiple accounts. Evaluate Holdings takes the
+   remaining headroom as an input; nothing tracks it across accounts yet.
+6. Parse a CAS PDF directly. Today the holdings importer needs CSV, which means an export step first.

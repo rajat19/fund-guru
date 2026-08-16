@@ -11,12 +11,8 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import { DATASET_PATH, DATASET_SCHEMA_VERSION, isFundDataset } from '@/types/dataset';
-import {
-  HOLDINGS_PATH,
-  HOLDINGS_SCHEMA_VERSION,
-  isHoldingsDataset,
-} from '@/types/holdings';
+import { DATASET_PATH, isFundDataset } from '@/types/dataset';
+import { HOLDINGS_PATH, isHoldingsDataset } from '@/types/holdings';
 
 const DEFAULT_MAX_AGE_DAYS = 45;
 
@@ -52,12 +48,6 @@ async function verifyHoldings(fundCount: number): Promise<void> {
 
   if (!isHoldingsDataset(parsed)) {
     return fail(`${target} is not a recognised holdings dataset.`);
-  }
-
-  if (parsed.schemaVersion !== HOLDINGS_SCHEMA_VERSION) {
-    return fail(
-      `${target} has schemaVersion ${parsed.schemaVersion}, expected ${HOLDINGS_SCHEMA_VERSION}.`,
-    );
   }
 
   const entries = Object.values(parsed.funds);
@@ -103,13 +93,7 @@ async function main() {
 
   if (!isFundDataset(parsed)) {
     return fail(
-      `${target} is not a dataset envelope. Expected { schemaVersion, generatedAt, count, funds }.`,
-    );
-  }
-
-  if (parsed.schemaVersion !== DATASET_SCHEMA_VERSION) {
-    return fail(
-      `${target} has schemaVersion ${parsed.schemaVersion}, but the app expects ${DATASET_SCHEMA_VERSION}. Re-run the sync.`,
+      `${target} is not a dataset envelope. Expected { generatedAt, count, funds }.`,
     );
   }
 

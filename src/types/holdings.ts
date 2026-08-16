@@ -27,14 +27,12 @@ export interface FundHoldings {
 }
 
 export interface HoldingsDataset {
-  schemaVersion: number;
   generatedAt: string;
   count: number;
   /** Keyed by scheme code, as a string because JSON object keys are strings. */
   funds: Record<string, FundHoldings>;
 }
 
-export const HOLDINGS_SCHEMA_VERSION = 1;
 
 export const HOLDINGS_PATH = 'data/holdings.json';
 

@@ -8,12 +8,10 @@ import { exportToCSV as generateCSV } from '@/services/dataProcessor';
 import type { MutualFund } from '@/types/mutualFund';
 import {
   DATASET_PATH,
-  DATASET_SCHEMA_VERSION,
   type FundDataset,
 } from '@/types/dataset';
 import {
   HOLDINGS_PATH,
-  HOLDINGS_SCHEMA_VERSION,
   type FundHoldings,
   type HoldingsDataset,
 } from '@/types/holdings';
@@ -143,7 +141,6 @@ export const updateLocalCache = async (funds: MutualFund[]): Promise<void> => {
   }
 
   const dataset: FundDataset = {
-    schemaVersion: DATASET_SCHEMA_VERSION,
     generatedAt: new Date().toISOString(),
     count: funds.length,
     funds,
@@ -191,7 +188,6 @@ export const writeHoldings = async (
   }
 
   const dataset: HoldingsDataset = {
-    schemaVersion: HOLDINGS_SCHEMA_VERSION,
     generatedAt: new Date().toISOString(),
     count,
     funds: holdings,

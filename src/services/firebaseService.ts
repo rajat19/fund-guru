@@ -17,7 +17,6 @@ import { db } from '@/lib/firebase';
 import { MutualFund } from '@/types/mutualFund';
 import {
   DATASET_PATH,
-  DATASET_SCHEMA_VERSION,
   isFundDataset,
 } from '@/types/dataset';
 import { FUNDS_CACHE_KEY, readLocalCache, setLocalCache } from '@/utils/cache';
@@ -184,13 +183,6 @@ const fetchStaticDataset = async (): Promise<LoadedDataset | null> => {
     const payload: unknown = await response.json();
     if (!isFundDataset(payload)) {
       console.warn(`⚠️ ${url} is not a recognised dataset envelope; ignoring`);
-      return null;
-    }
-
-    if (payload.schemaVersion !== DATASET_SCHEMA_VERSION) {
-      console.warn(
-        `⚠️ ${url} has schemaVersion ${payload.schemaVersion}, expected ${DATASET_SCHEMA_VERSION}; ignoring`,
-      );
       return null;
     }
 

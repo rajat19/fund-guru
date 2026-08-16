@@ -120,7 +120,30 @@ describe('dataset version', () => {
   });
 });
 
-describe('schema versioning', () => {
+describe('envelope recognition', () => {
+  it('still reads entries that carry a legacy schemaVersion field', async () => {
+    // Dropping the hand-maintained schema version must not invalidate what is
+    // already cached — otherwise every existing user refetches the whole dataset
+    // once for nothing. The extra field is simply ignored.
+    await new Promise<void>((resolve) => {
+      const request = indexedDB.open('FundGuruDB', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('cache');
+      request.onsuccess = () => {
+        const tx = request.result.transaction('cache', 'readwrite');
+        tx.objectStore('cache').put(
+          { schemaVersion: 4, cachedAt: Date.now(), version: 'build-1', data: ['funds'] },
+          KEY,
+        );
+        tx.oncomplete = () => resolve();
+      };
+    });
+
+    const result = await readLocalCache<string[]>(KEY);
+    expect(result.reason).toBe('hit');
+    expect(result.data).toEqual(['funds']);
+    expect(result.version).toBe('build-1');
+  });
+
   it('rejects a raw pre-envelope value rather than trusting it', async () => {
     // Entries written by the old implementation are bare arrays with no
     // timestamp, so their age is unknowable and they must not be served.

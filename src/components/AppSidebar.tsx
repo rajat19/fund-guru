@@ -1,4 +1,4 @@
-import { User, PlusCircle, Briefcase, Target, BarChart3, Home, TrendingUp, Shield, Wand2 } from 'lucide-react';
+import { User, PlusCircle, Briefcase, Target, BarChart3, ClipboardCheck, Home, TrendingUp, Shield, Wand2 } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -18,6 +18,8 @@ const mainItems = [
   { title: 'Dashboard', url: '/', icon: Home },
   { title: 'Fund Explorer', url: '/explorer', icon: TrendingUp },
   { title: 'Investment Builder', url: '/builder', icon: Wand2 },
+  // In Main rather than Investment: the whole point is that it works signed out.
+  { title: 'Evaluate Holdings', url: '/evaluate', icon: ClipboardCheck },
 ];
 
 const investmentItems = [

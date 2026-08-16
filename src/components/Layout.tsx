@@ -20,6 +20,7 @@ const getPageTitle = (pathname: string) => {
   if (pathname === '/') return 'Dashboard';
   if (pathname === '/explorer') return 'Fund Explorer';
   if (pathname === '/builder') return 'Investment Builder';
+  if (pathname === '/evaluate') return 'Evaluate Holdings';
   if (pathname === '/sip') return 'SIP Tracker';
   if (pathname === '/portfolio') return 'Portfolio';
   if (pathname === '/goals') return 'Goals';
