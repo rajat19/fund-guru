@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DUPLICATE_OVERLAP_PERCENT,
   evaluatePortfolio,
+  holdingDaysSince,
   holdingMonthsSince,
   OVERWEIGHT_FUND_PERCENT,
   QUICK_BREAK_EVEN_YEARS,
@@ -84,6 +85,7 @@ const holding = (overrides: Partial<MfHolding> = {}): MfHolding => ({
   sourceName: 'Peer 19 Fund Direct Growth',
   matchConfidence: 1,
   looksRegularPlan: false,
+  sourceFile: 'holdings.csv',
   units: 100,
   investedAmount: 100_000,
   currentValue: 150_000,
@@ -99,6 +101,7 @@ const sip = (overrides: Partial<SipHolding> = {}): SipHolding => ({
   sourceName: 'Peer 19 Fund Direct Growth',
   matchConfidence: 1,
   looksRegularPlan: false,
+  sourceFile: 'sips.csv',
   amount: 10_000,
   frequency: 'monthly',
   startDate: '2022-01-01',
@@ -119,6 +122,91 @@ describe('holdingMonthsSince', () => {
     expect(holdingMonthsSince('not a date', NOW)).toBeNull();
     // A purchase date in the future is a misread field, not a holding.
     expect(holdingMonthsSince('2030-01-01', NOW)).toBeNull();
+  });
+});
+
+describe('holdingDaysSince', () => {
+  it('counts exact days', () => {
+    expect(holdingDaysSince('2026-08-01', NOW)).toBe(15);
+    expect(holdingDaysSince('2026-08-16', NOW)).toBe(0);
+    expect(holdingDaysSince(null, NOW)).toBeNull();
+    expect(holdingDaysSince('2030-01-01', NOW)).toBeNull();
+  });
+});
+
+describe('switchCostOf — exit load windows measured in days', () => {
+  /*
+   * 408 of the 882 live schemes charging a load use a window under a month —
+   * 7, 15 and 30 days dominate. Evaluating those in whole months rounds a
+   * 20-day holding down to zero and charges it a load it has already escaped,
+   * so the exact day count has to reach the exit load parser.
+   */
+  const fifteenDay = makePeer(10, { exitLoad: 'Exit load of 1%, if redeemed within 15 days.' });
+
+  it('charges inside a 15-day window', () => {
+    const cost = switchCostOf(fifteenDay, {
+      invested: 100_000,
+      currentValue: 110_000,
+      holdingMonths: 0,
+      holdingDays: 10,
+    });
+    expect(cost?.exitLoadAmount).toBeCloseTo(1_100, 0);
+  });
+
+  it('does not charge a 20-day holding that has escaped a 15-day window', () => {
+    const cost = switchCostOf(fifteenDay, {
+      invested: 100_000,
+      currentValue: 110_000,
+      // Both are correct for the same holding: zero completed calendar months,
+      // twenty days elapsed. Only the day count can answer this.
+      holdingMonths: 0,
+      holdingDays: 20,
+    });
+    expect(cost?.exitLoadAmount).toBe(0);
+  });
+
+  it('falls back to months when no day count is supplied, and is lossy', () => {
+    // Documents the degradation rather than pretending it does not exist: with
+    // months only, a 20-day holding is indistinguishable from a same-day one.
+    const cost = switchCostOf(fifteenDay, {
+      invested: 100_000,
+      currentValue: 110_000,
+      holdingMonths: 0,
+    });
+    expect(cost?.exitLoadAmount).toBeCloseTo(1_100, 0);
+  });
+
+  it('applies the free-units allowance rather than the headline rate', () => {
+    // The form a third of schemes use. Charging the full rate on the whole
+    // redemption overstates the cost by up to 10x.
+    const freeLimit = makePeer(10, {
+      exitLoad:
+        'Exit Load for units in excess of 12% of the investment, 1% will be charged for redemption within 90 days.',
+    });
+
+    const cost = switchCostOf(freeLimit, {
+      invested: 100_000,
+      currentValue: 110_000,
+      holdingMonths: 1,
+      holdingDays: 40,
+    });
+
+    // 110,000 x 88% chargeable x 1%, not 110,000 x 1%.
+    expect(cost?.exitLoadAmount).toBeCloseTo(968, 0);
+  });
+
+  it('reports an unparsed load as uncertain instead of assuming none', () => {
+    const typo = makePeer(10, { exitLoad: 'Exit load of 1% if redeemed wtihin 1 year.' });
+    const cost = switchCostOf(typo, {
+      invested: 100_000,
+      currentValue: 110_000,
+      holdingMonths: 2,
+      holdingDays: 60,
+    });
+
+    expect(cost?.exitLoad.uncertain).toBe(true);
+    expect(cost?.exitLoadAmount).toBe(0);
+    expect(cost?.notes.join(' ')).toMatch(/could not be read/i);
   });
 });
 

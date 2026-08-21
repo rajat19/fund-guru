@@ -233,14 +233,18 @@ export interface AppliedExitLoad {
 }
 
 /**
- * What exit load a redemption at `holdingMonths` would actually attract.
+ * What exit load a redemption after `holdingDays` would actually attract.
+ *
+ * Days, not months, is the honest unit here: 408 of the 882 live schemes that
+ * charge a load use a window under a month (7, 15 and 30 days dominate), so a
+ * caller that only knows the holding period in whole months cannot ask this
+ * question correctly. Anything holding an actual purchase date should use this
+ * and not `applyExitLoad`.
  */
-export const applyExitLoad = (
+export const applyExitLoadForDays = (
   policy: ExitLoadPolicy,
-  holdingMonths: number,
+  holdingDays: number,
 ): AppliedExitLoad => {
-  const holdingDays = holdingMonths * DAYS_PER_MONTH;
-
   if (policy.kind === 'none') {
     return {
       ratePercent: 0,
@@ -286,6 +290,21 @@ export const applyExitLoad = (
     note: policy.note,
   };
 };
+
+/**
+ * Month-granularity wrapper, for callers working from a slider rather than a
+ * date — the redemption calculator, where the user picks "36 months".
+ *
+ * Lossy by construction: any holding period under a month collapses to zero
+ * days, so a 20-day holding looks like a same-day one and gets charged a 15-day
+ * load it has already escaped. That is acceptable when the input really is a
+ * whole number of months and wrong when a real date was available, which is why
+ * `applyExitLoadForDays` exists.
+ */
+export const applyExitLoad = (
+  policy: ExitLoadPolicy,
+  holdingMonths: number,
+): AppliedExitLoad => applyExitLoadForDays(policy, holdingMonths * DAYS_PER_MONTH);
 
 /** Human-readable summary of the load window, for display next to the raw text. */
 export const describeExitLoad = (policy: ExitLoadPolicy): string => {

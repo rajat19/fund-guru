@@ -35,9 +35,14 @@ const snapshotRef = (uid: string) => doc(db, 'users', uid, SNAPSHOT_COLLECTION, 
 
 export interface UseUserHoldings {
   snapshot: HoldingsSnapshot;
-  /** Replace the holdings list. A fresh import replaces rather than appends. */
-  setMfHoldings: (rows: MfHolding[]) => void;
-  setSipHoldings: (rows: SipHolding[]) => void;
+  /**
+   * Replace both lists at once.
+   *
+   * One mutation rather than two, so the evaluation runs once for a commit
+   * instead of once per list — and so the intermediate state, where holdings have
+   * been replaced but SIPs have not, never reaches the analysis.
+   */
+  setHoldings: (mf: MfHolding[], sips: SipHolding[]) => void;
   removeMfHolding: (id: string) => void;
   removeSipHolding: (id: string) => void;
   clearAll: () => void;
@@ -126,13 +131,8 @@ export const useUserHoldings = (): UseUserHoldings => {
     setSnapshot((current) => next(current));
   }, []);
 
-  const setMfHoldings = useCallback(
-    (rows: MfHolding[]) => mutate((current) => ({ ...current, mf: rows })),
-    [mutate],
-  );
-
-  const setSipHoldings = useCallback(
-    (rows: SipHolding[]) => mutate((current) => ({ ...current, sips: rows })),
+  const setHoldings = useCallback(
+    (mf: MfHolding[], sips: SipHolding[]) => mutate((current) => ({ ...current, mf, sips })),
     [mutate],
   );
 
@@ -229,8 +229,7 @@ export const useUserHoldings = (): UseUserHoldings => {
 
   return {
     snapshot,
-    setMfHoldings,
-    setSipHoldings,
+    setHoldings,
     removeMfHolding,
     removeSipHolding,
     clearAll,

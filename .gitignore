@@ -25,5 +25,7 @@ dist-ssr
 
 __generated__/
 
+*.env
+
 # public/data/funds.json is deliberately NOT ignored — it is the published
 # dataset the app reads at runtime, so it has to be committed.

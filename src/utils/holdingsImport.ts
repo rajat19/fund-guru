@@ -275,6 +275,43 @@ const satisfiesRequired = (map: ColumnMap, kind: ImportKind): boolean =>
 const HEADER_SEARCH_ROWS = 25;
 
 /**
+ * A table to import from: a CSV file, or one sheet of a workbook.
+ *
+ * Both sources reduce to this, so the column matching, row reading and matching
+ * logic below exists once rather than twice.
+ */
+export interface SourceTable {
+  rows: string[][];
+  /** Physical line (or spreadsheet row) number per entry in `rows`. */
+  lineNumbers: number[];
+  /** Shown in errors: a file name, or "book.xlsx › Holdings". */
+  label: string;
+}
+
+export const tableFromCsv = (text: string, label: string): SourceTable => {
+  const document: CsvDocument = parseCsv(text);
+  return { rows: document.rows, lineNumbers: document.lineNumbers, label };
+};
+
+/** One table per worksheet, blank rows dropped but row numbers preserved. */
+export const tablesFromSheets = (
+  sheets: Array<{ name: string; rows: string[][] }>,
+  fileLabel: string,
+): SourceTable[] =>
+  sheets.map((sheet) => {
+    const rows: string[][] = [];
+    const lineNumbers: number[] = [];
+
+    sheet.rows.forEach((row, index) => {
+      if (row.length === 0 || row.every((cell) => cell === '')) return;
+      rows.push(row);
+      lineNumbers.push(index + 1);
+    });
+
+    return { rows, lineNumbers, label: `${fileLabel} › ${sheet.name}` };
+  });
+
+/**
  * Locate the header row.
  *
  * Exports lead with titles, account numbers and blank lines, so the first row is
@@ -284,7 +321,7 @@ const HEADER_SEARCH_ROWS = 25;
  * are not header aliases.
  */
 export const findHeaderRow = (
-  document: CsvDocument,
+  document: { rows: string[][] },
   kind: ImportKind,
 ): { index: number; map: ColumnMap } | null => {
   let best: { index: number; map: ColumnMap; matched: number } | null = null;
@@ -300,6 +337,32 @@ export const findHeaderRow = (
   }
 
   return best ? { index: best.index, map: best.map } : null;
+};
+
+/**
+ * Of several tables, the one that looks most like the data we want.
+ *
+ * Workbooks routinely lead with a "Summary" or "Disclaimer" sheet, so taking the
+ * first would import nothing. Scored on how many canonical columns the header
+ * maps and then on how many data rows follow it, which picks the real table
+ * without needing the sheet to be named anything in particular.
+ */
+export const pickBestTable = (tables: SourceTable[], kind: ImportKind): SourceTable | null => {
+  let best: { table: SourceTable; score: number } | null = null;
+
+  for (const table of tables) {
+    const header = findHeaderRow(table, kind);
+    if (!header) continue;
+
+    const columns = Object.keys(header.map.positions).length;
+    const dataRows = table.rows.length - header.index - 1;
+    if (dataRows <= 0) continue;
+
+    const score = columns * 1000 + Math.min(dataRows, 999);
+    if (best == null || score > best.score) best = { table, score };
+  }
+
+  return best?.table ?? null;
 };
 
 /**
@@ -538,32 +601,35 @@ const emptyReport = <T>(kind: ImportKind, error: string): ImportReport<T> => ({
   error,
 });
 
-/** Shared preamble: parse, find the header, and hand back the data rows. */
+/** Shared preamble: find the header, and hand back the data rows. */
 const readTable = (
-  text: string,
+  tables: SourceTable[],
   kind: ImportKind,
-): { map: ColumnMap; body: Array<{ cells: string[]; line: number }> } | { error: string } => {
-  if (text.trim() === '') return { error: 'That file is empty.' };
+):
+  | { map: ColumnMap; body: Array<{ cells: string[]; line: number }>; label: string }
+  | { error: string } => {
+  const usable = tables.filter((table) => table.rows.length > 0);
+  if (usable.length === 0) return { error: 'That file is empty.' };
 
-  const document = parseCsv(text);
-  if (document.rows.length === 0) return { error: 'That file has no readable rows.' };
-
-  const header = findHeaderRow(document, kind);
-  if (!header) {
+  const table = pickBestTable(usable, kind);
+  if (!table) {
     const needed =
       kind === 'mf'
         ? 'a scheme name column plus at least one of current value, invested amount or units'
         : 'a scheme name column plus an instalment amount column';
+    const where = usable.length > 1 ? ` Looked at all ${usable.length} sheets.` : '';
     return {
-      error: `Could not find a header row. This needs ${needed}. Column names are matched loosely, so "Scheme Name", "Fund", "Market Value" and "Current Value (₹)" all work.`,
+      error: `Could not find a header row. This needs ${needed}.${where} Column names are matched loosely, so "Scheme Name", "Fund", "Market Value" and "Current Value (₹)" all work.`,
     };
   }
 
-  const body = document.rows
-    .slice(header.index + 1)
-    .map((cells, offset) => ({ cells, line: document.lineNumbers[header.index + 1 + offset] }));
+  const header = findHeaderRow(table, kind)!;
 
-  return { map: header.map, body };
+  const body = table.rows
+    .slice(header.index + 1)
+    .map((cells, offset) => ({ cells, line: table.lineNumbers[header.index + 1 + offset] }));
+
+  return { map: header.map, body, label: table.label };
 };
 
 const cellAt = (cells: string[], map: ColumnMap, column: Column): string | undefined => {
@@ -638,15 +704,15 @@ const resolveMatch = (
   };
 };
 
-export const importMfHoldings = (
-  text: string,
+export const importMfTables = (
+  tables: SourceTable[],
   index: FundMatchIndex,
   now: Date = new Date(),
 ): ImportReport<MfHolding> => {
-  const table = readTable(text, 'mf');
+  const table = readTable(tables, 'mf');
   if ('error' in table) return emptyReport<MfHolding>('mf', table.error);
 
-  const { map, body } = table;
+  const { map, body, label } = table;
   const rows: MfHolding[] = [];
   const skipped: SkippedRow[] = [];
   const warnings = columnWarnings(map, 'mf');
@@ -722,6 +788,7 @@ export const importMfHoldings = (
       sourceName: name,
       matchConfidence: resolved.match.confidence,
       looksRegularPlan: regular,
+      sourceFile: label,
       units,
       investedAmount,
       currentValue,
@@ -752,15 +819,15 @@ export const importMfHoldings = (
   };
 };
 
-export const importSipHoldings = (
-  text: string,
+export const importSipTables = (
+  tables: SourceTable[],
   index: FundMatchIndex,
   now: Date = new Date(),
 ): ImportReport<SipHolding> => {
-  const table = readTable(text, 'sip');
+  const table = readTable(tables, 'sip');
   if ('error' in table) return emptyReport<SipHolding>('sip', table.error);
 
-  const { map, body } = table;
+  const { map, body, label } = table;
   const rows: SipHolding[] = [];
   const skipped: SkippedRow[] = [];
   const warnings = columnWarnings(map, 'sip');
@@ -829,6 +896,7 @@ export const importSipHoldings = (
       sourceName: name,
       matchConfidence: resolved.match.confidence,
       looksRegularPlan: regular,
+      sourceFile: label,
       amount,
       frequency,
       startDate: date.iso,
@@ -862,6 +930,170 @@ export const importSipHoldings = (
     error: rows.length === 0 && skipped.length === 0 ? 'No SIP rows found below the header.' : null,
   };
 };
+
+/** CSV convenience wrappers. A CSV is one table. */
+export const importMfHoldings = (
+  text: string,
+  index: FundMatchIndex,
+  now: Date = new Date(),
+  label = 'pasted data',
+): ImportReport<MfHolding> =>
+  importMfTables(text.trim() === '' ? [] : [tableFromCsv(text, label)], index, now);
+
+export const importSipHoldings = (
+  text: string,
+  index: FundMatchIndex,
+  now: Date = new Date(),
+  label = 'pasted data',
+): ImportReport<SipHolding> =>
+  importSipTables(text.trim() === '' ? [] : [tableFromCsv(text, label)], index, now);
+
+/* ---------------------------------------------------------------------------
+ * Combining several files
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Clubbing files together is where double-counting gets in.
+ *
+ * Two failure modes, and they need opposite handling:
+ *
+ *  - **The same row in two files.** Someone uploads a statement twice, or two
+ *    exports overlap. Every figure on the page would double. Safe to drop, since
+ *    the rows are identical — nothing is lost.
+ *  - **The same position, restated.** A January statement and an August one both
+ *    list the same fund and folio with *different* units. Neither dropping nor
+ *    summing is right: summing invents money that does not exist, and dropping
+ *    silently picks a version. So the first is kept and the collision is
+ *    **reported**, naming both files, for the user to resolve by removing one.
+ *
+ * Within a single file, repeated fund+folio rows are left alone — a
+ * transaction-level statement legitimately lists one row per purchase, and each
+ * has its own acquisition date and so its own tax lot.
+ */
+export interface MergeOutcome<T> {
+  rows: T[];
+  /** Identical rows that appeared in more than one file. */
+  duplicatesDropped: number;
+  /** Contradictions between files, which only the user can settle. */
+  conflicts: Array<{
+    description: string;
+    keptFrom: string;
+    droppedFrom: string;
+  }>;
+}
+
+/** Units and rupees compared at a tolerance, since exports round differently. */
+const figureKey = (value: number | null): string =>
+  value == null ? '-' : value.toFixed(3);
+
+const mergeRows = <T extends { id: string; sourceFile: string | null }>(
+  rows: T[],
+  idPrefix: string,
+  exactKeyOf: (row: T) => string,
+  identityKeyOf: (row: T) => string | null,
+  describe: (row: T) => string,
+): MergeOutcome<T> => {
+  const kept: T[] = [];
+  const seenExact = new Map<string, T>();
+  const seenIdentity = new Map<string, T>();
+  const conflicts: MergeOutcome<T>['conflicts'] = [];
+  let duplicatesDropped = 0;
+
+  for (const row of rows) {
+    const exact = exactKeyOf(row);
+    const previousExact = seenExact.get(exact);
+
+    if (previousExact && previousExact.sourceFile !== row.sourceFile) {
+      duplicatesDropped += 1;
+      continue;
+    }
+
+    const identity = identityKeyOf(row);
+    if (identity != null) {
+      const previous = seenIdentity.get(identity);
+      // Only a conflict across files; within one file it is a separate lot.
+      if (previous && previous.sourceFile !== row.sourceFile) {
+        conflicts.push({
+          description: describe(row),
+          keptFrom: previous.sourceFile ?? 'an earlier file',
+          droppedFrom: row.sourceFile ?? 'this file',
+        });
+        continue;
+      }
+      if (!previous) seenIdentity.set(identity, row);
+    }
+
+    if (!previousExact) seenExact.set(exact, row);
+    kept.push(row);
+  }
+
+  return {
+    rows: kept.map((row, index) => ({ ...row, id: `${idPrefix}-${index + 1}` })),
+    duplicatesDropped,
+    conflicts,
+  };
+};
+
+/**
+ * Fold a newly-read batch of files into the set already loaded.
+ *
+ * Keyed by file name, with the new load winning, so re-picking a file you have
+ * already uploaded corrects it rather than counting it twice. Order is preserved
+ * — a replaced file stays where it was, so the on-screen list does not reshuffle
+ * under the user.
+ *
+ * Pure and exported rather than inline in the upload component because it decides
+ * what the analysis is computed over, which is worth a test.
+ */
+export const upsertFiles = <T extends { name: string }>(existing: T[], incoming: T[]): T[] => {
+  const result = [...existing];
+
+  for (const file of incoming) {
+    const at = result.findIndex((current) => current.name === file.name);
+    if (at >= 0) result[at] = file;
+    else result.push(file);
+  }
+
+  return result;
+};
+
+export const mergeMfHoldings = (rows: MfHolding[]): MergeOutcome<MfHolding> =>
+  mergeRows(
+    rows,
+    'mf',
+    (row) =>
+      [
+        row.fundId ?? row.sourceName,
+        row.folio ?? '',
+        figureKey(row.units),
+        figureKey(row.investedAmount),
+        figureKey(row.currentValue),
+        row.purchaseDate ?? '',
+      ].join('|'),
+    // A folio is what makes two rows for one fund distinguishable. Without one,
+    // there is no way to tell a restatement from a second lot, so no identity is
+    // claimed and both rows are kept.
+    (row) => (row.folio ? `${row.fundId ?? row.sourceName}|${row.folio}` : null),
+    (row) => `${row.sourceName} (folio ${row.folio})`,
+  );
+
+export const mergeSipHoldings = (rows: SipHolding[]): MergeOutcome<SipHolding> =>
+  mergeRows(
+    rows,
+    'sip',
+    (row) =>
+      [
+        row.fundId ?? row.sourceName,
+        figureKey(row.amount),
+        row.frequency,
+        row.startDate ?? '',
+        row.active ? '1' : '0',
+      ].join('|'),
+    // Same fund and same start date is one SIP restated. A different start date
+    // is a genuinely separate registration and both are kept.
+    (row) => (row.startDate ? `${row.fundId ?? row.sourceName}|${row.startDate}` : null),
+    (row) => `${row.sourceName} (started ${row.startDate})`,
+  );
 
 /**
  * A file whose columns this importer definitely understands.

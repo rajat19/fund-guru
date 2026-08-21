@@ -69,6 +69,14 @@ export interface HoldingMatch {
    * actually paying. Flagged rather than hidden.
    */
   looksRegularPlan: boolean;
+  /**
+   * Which uploaded file this row came from, and which sheet within it.
+   *
+   * Needed once several files can be combined: a duplicate or a contradiction
+   * between two statements is only explainable if each row remembers where it
+   * came from. Null for rows restored from a save made before this existed.
+   */
+  sourceFile: string | null;
 }
 
 /** A position the user already owns. */
@@ -141,6 +149,7 @@ const sanitiseMatch = (row: Record<string, unknown>): HoldingMatch => ({
   sourceName: asStringOrNull(row.sourceName) ?? 'Unnamed scheme',
   matchConfidence: asNumberOrNull(row.matchConfidence) ?? 0,
   looksRegularPlan: row.looksRegularPlan === true,
+  sourceFile: asStringOrNull(row.sourceFile),
 });
 
 /**

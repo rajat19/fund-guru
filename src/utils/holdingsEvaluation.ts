@@ -20,7 +20,7 @@ import {
   type AssetAllocation,
   type AssetClass,
 } from '@/utils/assetClass';
-import { applyExitLoad, exitLoadPolicyFor, type AppliedExitLoad } from '@/utils/exitLoad';
+import { applyExitLoadForDays, exitLoadPolicyFor, type AppliedExitLoad } from '@/utils/exitLoad';
 import { postTaxReturn, taxProfile } from '@/utils/taxation';
 import { toNumber } from '@/utils/number';
 import { trackRecordOf } from '@/utils/trackRecord';
@@ -369,6 +369,8 @@ export interface PortfolioEvaluation {
  * Helpers
  * ------------------------------------------------------------------------- */
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 /**
  * Completed *calendar* months between a purchase date and now.
  *
@@ -394,6 +396,28 @@ export const holdingMonthsSince = (
 
   // The month is only complete once the day-of-month has come round again.
   return Math.max(0, now.getUTCDate() < start.getUTCDate() ? months - 1 : months);
+};
+
+/**
+ * Exact days held.
+ *
+ * Kept separate from the month count because the two are used for genuinely
+ * different things and neither substitutes for the other. Capital gains
+ * thresholds are written in months from the acquisition date, so tax uses
+ * `holdingMonthsSince`. Exit load windows are mostly written in *days* — 7, 15
+ * and 30 dominate the live data — so rounding to whole months would charge a
+ * 20-day-old holding a 15-day load it has already escaped.
+ */
+export const holdingDaysSince = (
+  isoDate: string | null,
+  now: Date = new Date(),
+): number | null => {
+  if (!isoDate) return null;
+  const start = new Date(isoDate);
+  if (Number.isNaN(start.getTime())) return null;
+
+  const days = Math.floor((now.getTime() - start.getTime()) / MS_PER_DAY);
+  return days < 0 ? null : days;
 };
 
 /** Average excess over the fund's own category across the horizons we have. */
@@ -449,7 +473,13 @@ export const switchCostOf = (
   input: {
     invested: number | null;
     currentValue: number | null;
+    /** Completed calendar months, for the capital gains thresholds. */
     holdingMonths: number | null;
+    /**
+     * Exact days held, for the exit load window. Falls back to the month count
+     * when absent, which is lossy for the sub-month windows most schemes use.
+     */
+    holdingDays?: number | null;
     slabRatePercent?: number;
     exemptionHeadroomRupees?: number;
   },
@@ -459,7 +489,9 @@ export const switchCostOf = (
 
   const notes: string[] = [];
 
-  const applied = applyExitLoad(exitLoadPolicyFor(fund), holdingMonths);
+  // Days where we have them: a 15-day window cannot be evaluated in whole months.
+  const days = input.holdingDays ?? holdingMonths * 30.44;
+  const applied = applyExitLoadForDays(exitLoadPolicyFor(fund), days);
   const exitLoadAmount = currentValue * applied.chargeableFraction * (applied.ratePercent / 100);
 
   if (applied.uncertain) {
@@ -724,10 +756,16 @@ const formatMonths = (months: number): string =>
  * Per-holding signals and verdict
  * ------------------------------------------------------------------------- */
 
+interface SignalContext {
+  duplicateFolios: number;
+  valuedCount: number;
+  /** True when a SIP in the snapshot is still feeding this same fund. */
+  hasActiveSip: boolean;
+}
+
 const holdingSignals = (
   evaluated: Omit<EvaluatedHolding, 'signals' | 'verdict' | 'verdictReason'>,
-  duplicateFolios: number,
-  valuedCount: number,
+  { duplicateFolios, valuedCount, hasActiveSip }: SignalContext,
 ): Signal[] => {
   const signals: Signal[] = [];
   const { fund, breakdown, standing } = evaluated;
@@ -879,6 +917,23 @@ const holdingSignals = (
       tone: 'warn',
       message:
         'Your statement names a regular plan. Metrics here are for the direct plan of the same scheme, so the real expense ratio you pay is higher than shown.',
+    });
+  }
+
+  /*
+   * A position still being fed by a SIP is not one lot, it is one lot per
+   * instalment — each with its own exit load window and its own capital gains
+   * clock. The file gives a single purchase date, so the cost of leaving is
+   * computed as though the whole position were bought then, which *understates*
+   * it: the newest instalments may still be inside the load window and are
+   * certainly short-term. Worth saying rather than quietly being wrong.
+   */
+  if (hasActiveSip && evaluated.switchCost != null) {
+    signals.push({
+      kind: 'tax-timing',
+      tone: 'warn',
+      message:
+        'A SIP is still adding to this fund, so the position is many lots with different dates. The switch cost above treats it as one lot bought on the stated date, which understates it — the most recent instalments are short-term and may still be inside the exit load window.',
     });
   }
 
@@ -1343,6 +1398,7 @@ export const evaluatePortfolio = (input: EvaluationInput): PortfolioEvaluation =
     const gain = invested != null && currentValue != null ? currentValue - invested : null;
 
     const holdingMonths = holdingMonthsSince(holding.purchaseDate, now);
+    const holdingDays = holdingDaysSince(holding.purchaseDate, now);
 
     return {
       holding,
@@ -1364,6 +1420,7 @@ export const evaluatePortfolio = (input: EvaluationInput): PortfolioEvaluation =
               invested,
               currentValue,
               holdingMonths,
+              holdingDays,
               slabRatePercent: input.slabRatePercent,
               exemptionHeadroomRupees: input.exemptionHeadroomRupees,
             })
@@ -1459,12 +1516,19 @@ export const evaluatePortfolio = (input: EvaluationInput): PortfolioEvaluation =
     (draft) => draft.fund != null && draft.currentValue != null && draft.currentValue > 0,
   ).length;
 
+  const fundsWithActiveSip = new Set(
+    input.sips.filter((row) => row.active && row.fundId != null).map((row) => row.fundId!),
+  );
+
   const holdings: EvaluatedHolding[] = drafts.map((draft) => {
-    const duplicates = draft.fund ? folioCounts.get(draft.fund.id) ?? 1 : 1;
     const { verdict, reason } = holdingVerdict(draft, valuedCount);
     return {
       ...draft,
-      signals: holdingSignals(draft, duplicates, valuedCount),
+      signals: holdingSignals(draft, {
+        duplicateFolios: draft.fund ? folioCounts.get(draft.fund.id) ?? 1 : 1,
+        valuedCount,
+        hasActiveSip: draft.fund != null && fundsWithActiveSip.has(draft.fund.id),
+      }),
       verdict,
       verdictReason: reason,
     };

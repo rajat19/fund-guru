@@ -59,8 +59,7 @@ export default function Evaluate() {
 
   const {
     snapshot,
-    setMfHoldings,
-    setSipHoldings,
+    setHoldings,
     removeMfHolding,
     removeSipHolding,
     clearAll,
@@ -251,15 +250,30 @@ export default function Evaluate() {
 
           {error && <p className="text-xs text-loss">{error}</p>}
 
+          {/*
+            Generating replaces both lists wholesale. Worth saying when the rows on
+            screen came from a save rather than from files, since the staged files
+            are then not the same thing as what is being analysed.
+          */}
+          {!isEmpty && (
+            <p className="text-xs text-muted-foreground flex gap-2">
+              <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>
+                Analysing {snapshot.mf.length} holding{snapshot.mf.length === 1 ? '' : 's'} and{' '}
+                {snapshot.sips.length} SIP{snapshot.sips.length === 1 ? '' : 's'}. Generating replaces
+                both lists with whatever is staged, so add every file you want counted before pressing
+                it.
+              </span>
+            </p>
+          )}
+
           {isLoading ? (
             <p className="text-sm text-muted-foreground">Loading the fund universe…</p>
           ) : (
             <HoldingsImporter
               universe={universe}
-              mfCount={snapshot.mf.length}
-              sipCount={snapshot.sips.length}
-              onMfImported={setMfHoldings}
-              onSipImported={setSipHoldings}
+              onGenerate={setHoldings}
+              hasAnalysis={!isEmpty}
             />
           )}
 
@@ -369,11 +383,12 @@ export default function Evaluate() {
         <Card>
           <CardContent className="py-12 text-center space-y-2">
             <p className="text-sm text-muted-foreground">
-              Upload a holdings or SIP CSV above to see the analysis.
+              Add your files above, then press Generate.
             </p>
             <p className="text-xs text-muted-foreground">
-              Either file on its own is enough. Column names are matched loosely, so most broker and
-              registrar exports work as-is — and the template shows a file that definitely does.
+              Holdings or SIPs, either on its own is enough, and as many files as you like — CSV, TSV
+              or .xlsx. Column names are matched loosely, so most broker and registrar exports work
+              as-is, and the template shows a file that definitely does.
             </p>
           </CardContent>
         </Card>

@@ -20,7 +20,7 @@ returns, cost, and risk-adjusted metrics, and shows what tax treatment does to t
 | **Redemption calculator** | ✅ Working | Amount + holding-period slider → value after exit load and capital gains tax. See [below](#redemption-calculator). |
 | **Track record filter** | ✅ Working | Minimum-history gate, defaulted to 3y. See [below](#track-record--filtering-out-new-funds). |
 | **Investment Builder** | ✅ Working | Rules + amount + risk + asset split → per-fund allocation, overlap-aware. Lumpsum or monthly SIP. See [below](#investment-builder). |
-| **Evaluate Holdings** | ✅ Working | Upload a holdings and/or SIP CSV → ranking, keep/switch/trim verdicts costed against exit load and capital gains tax, overlap, stock look-through. Works signed out; saves to Firestore only on an explicit Save. See [below](#evaluate-holdings). |
+| **Evaluate Holdings** | ✅ Working | Upload holdings and/or SIP files — several at once, CSV or .xlsx — → ranking, keep/switch/trim verdicts costed against exit load and capital gains tax, overlap, stock look-through. Works signed out; saves to Firestore only on an explicit Save. See [below](#evaluate-holdings). |
 | **Dashboard** | ✅ Working | Universe stats, top 3 per category, shortlist filtered by riskometer band. |
 | **Data sync** | ✅ Working | Local CLI only — see [Data pipeline](#data-pipeline). |
 | **Auth** | ✅ Working | Google sign-in; admin gated by Firestore rules. |
@@ -248,7 +248,24 @@ Every "worth switching" clears two independent tests, not one:
 
 Exit load reuses the [parser](#exit-load-parsing) — including the "first 10% of units are free" form,
 which a naive rate × value overstates by up to 10× — and tax reuses the one dated
-[rate table](#tax-layer), so the long-term exemption and the slab-taxed buckets behave correctly. The
+[rate table](#tax-layer), so the long-term exemption and the slab-taxed buckets behave correctly.
+
+**The two clocks are counted in different units, deliberately.** Capital gains thresholds are written
+in months from the acquisition date, so tax uses completed *calendar* months — day-arithmetic with an
+average 30.44-day month makes 365 days read as 11.99 and floor to 11, which would apply 20%
+short-term tax to a holding that is exactly a year old. Exit load windows are mostly written in
+**days**: measured on the live dataset, 408 of the 882 schemes that charge a load use a window under
+a month, with 7, 15 and 30 days dominating. Rounding those to whole months charges a 20-day-old
+holding a 15-day load it has already escaped, so exit load is evaluated on the exact day count via
+`applyExitLoadForDays`. `applyExitLoad` remains for the redemption calculator, whose input really is
+a whole number of months, and its doc comment says what it loses.
+
+A position still being fed by a SIP is flagged rather than mis-costed: it is one lot per instalment,
+each with its own load window and gains clock, while the file gives a single purchase date. The
+switch cost is computed as though it were one lot bought then, which *understates* it, and the row
+says so.
+
+The
 break-even figure is `cost% ÷ annual return gap`, which assumes the trailing gap persists; that is an
 assumption, not a forecast, so the verdict text always names the gap and the horizon it came from.
 
@@ -299,13 +316,56 @@ index. Duplication still counts — owning the index twice is real.
   correct with new money than by selling, and the text says so.
 - **Annual fee cost in rupees**, since a money-weighted 0.32% is abstract and "₹365 a year" is not.
 
-### Reading the file
+### Reading the files
 
 There is no standard export, so nothing about the layout is assumed. Columns are matched by name
 against an alias table (`Current Value`, `Market Value`, `Valuation`, `Present Value (₹)` all work),
 never by position, and the header row is *found* rather than assumed — real exports lead with a title,
 an account number and a blank line. `Amount` deliberately means cost in a holdings file and instalment
 in a SIP file; swapping them would report a nonsense return.
+
+**Several files at once**, because one portfolio is often several accounts — a broker export plus a
+registrar statement, or one file per family member.
+
+**Files are staged, then analysed on one explicit Generate.** Each file is read and validated as it is
+picked, because column mapping, skipped rows and parse errors are feedback about *that file* and
+withholding them until the end would make a bad upload hard to attribute. But nothing reaches the
+analysis until the button is pressed.
+
+That split is not about saving work. Portfolio-level figures — allocation, AMC concentration, overlap,
+ranking — are only meaningful over a *complete* portfolio, so recomputing as each file lands would put
+"62% of your portfolio is with one fund house" on screen when two of three accounts have been read: a
+confident, wrong, actionable number. One deterministic transition means a half-portfolio verdict is
+never rendered at all. Generate replaces both lists wholesale, and the staged summary says how many
+files and rows are about to be analysed.
+
+Clubbing is where double-counting gets in, and the two ways it happens need opposite handling:
+
+| Case | Handling | Why |
+| --- | --- | --- |
+| The **same row** in two files (a statement uploaded twice) | Dropped, and counted in the report | The rows are identical, so nothing is lost |
+| The **same position restated** — same fund and folio, different units (a January file and an August one) | First kept, collision **reported** naming both files | Summing invents money that does not exist; dropping silently picks a version |
+| Repeated fund+folio **within one file** | Both kept | A transaction-level statement lists one row per purchase, and each has its own acquisition date and so its own tax lot |
+| Same fund, **different folio** | Both kept | Genuinely separate positions |
+| Same fund, **no folio** to tell them apart | Both kept | With nothing to identify a restatement by, dropping would be a guess |
+
+**.xlsx is read directly**, with no dependency. SheetJS on npm is stuck at 0.18.5 with known
+prototype-pollution advisories (the fixed builds are only on the maintainer's own CDN), and ExcelJS is
+about a megabyte on a page this app otherwise keeps lean — while the platform now supplies the hard
+part, since `DecompressionStream('deflate-raw')` does the inflate. What is left is the zip directory
+and a little XML.
+
+Two things make .xlsx harder than it looks, and both are handled:
+
+- **Dates are numbers.** A purchase date arrives as `45397`, and whether that is a date or a quantity
+  is recorded in the cell's *style*, not the cell. So `styles.xml` is parsed and serials are converted
+  only for date-formatted cells — a currency-formatted `44813.5` stays a number. The epoch is
+  1899-12-30, not 1900-01-01, because Excel is bug-compatible with Lotus 1-2-3 over the 1900 leap
+  year; using the obvious date puts everything two days out.
+- **The first sheet is usually not the data.** Workbooks lead with "Summary" or "Disclaimer", so every
+  sheet is scored on how many columns its header maps and how many rows follow, and the best one wins.
+
+Two parsing details that are easy to get silently wrong:
 
 Two parsing details that are easy to get silently wrong:
 
@@ -544,9 +604,12 @@ pnpm check
 ```
 
 Runs typecheck, lint, and tests. `pnpm test` for watch mode. Tests cover the scoring engine, tax
-classification, exit load parsing, the investment builder, holdings evaluation, CSV and statement
-parsing, scheme-name matching, formatters, the cache TTL, and the Groww→model mapping. UI components
-and the sync pipeline are not unit-tested — they need integration coverage.
+classification, exit load parsing, the investment builder, holdings evaluation, CSV and .xlsx reading,
+statement parsing, multi-file merging, scheme-name matching, formatters, the cache TTL, and the
+Groww→model mapping. The .xlsx reader is tested against a real deflated workbook fixture rather than a
+mock, since the things that break such a reader — date-styled serials, sparse rows, rich-text shared
+strings — only exist in a genuine file. UI components and the sync pipeline are not unit-tested — they
+need integration coverage.
 
 ## Tech stack
 
@@ -575,4 +638,5 @@ Firebase Auth + Firestore · Vitest
 4. Real persistence for goals. Holdings are done — see [Evaluate Holdings](#evaluate-holdings).
 5. Per-PAN long-term exemption headroom tracking across multiple accounts. Evaluate Holdings takes the
    remaining headroom as an input; nothing tracks it across accounts yet.
-6. Parse a CAS PDF directly. Today the holdings importer needs CSV, which means an export step first.
+6. Parse a CAS PDF directly. The holdings importer reads CSV and .xlsx, so a PDF statement still needs
+   an export step first.

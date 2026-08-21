@@ -1,16 +1,27 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   findHeaderRow,
   importMfHoldings,
+  importMfTables,
   importSipHoldings,
   mapColumns,
+  mergeMfHoldings,
+  mergeSipHoldings,
   normaliseHeader,
   parseActive,
   parseAmount,
   parseFrequency,
   parseStatementDate,
+  pickBestTable,
+  tablesFromSheets,
   templateCsv,
+  upsertFiles,
+  type SourceTable,
 } from '@/utils/holdingsImport';
+import { readXlsx } from '@/utils/xlsx';
+import type { MfHolding, SipHolding } from '@/types/userHoldings';
 import { parseCsv } from '@/utils/csv';
 import { buildFundMatchIndex } from '@/utils/fundMatch';
 import { makeFund } from '@/utils/__fixtures__/fund';
@@ -385,6 +396,329 @@ describe('parseActive', () => {
     expect(parseActive('Completed')).toBe(false);
     expect(parseActive('Active')).toBe(true);
     expect(parseActive('Running')).toBe(true);
+  });
+});
+
+describe('pickBestTable', () => {
+  const summary: SourceTable = {
+    label: 'book.xlsx › Summary',
+    rows: [['Portfolio Summary'], ['Generated today']],
+    lineNumbers: [1, 2],
+  };
+
+  const holdings: SourceTable = {
+    label: 'book.xlsx › Holdings',
+    rows: [
+      ['Scheme Name', 'Units', 'Current Value'],
+      ['Parag Parikh Flexi Cap Fund Direct Growth', '100', '50000'],
+    ],
+    lineNumbers: [1, 2],
+  };
+
+  it('skips a decoy sheet and finds the one with the data', () => {
+    // Workbooks routinely lead with a Summary or Disclaimer sheet, so taking the
+    // first would import nothing.
+    expect(pickBestTable([summary, holdings], 'mf')?.label).toBe('book.xlsx › Holdings');
+  });
+
+  it('prefers the sheet mapping more columns', () => {
+    const richer: SourceTable = {
+      label: 'book.xlsx › Detail',
+      rows: [
+        ['Scheme Name', 'Folio', 'Units', 'Average NAV', 'Current Value', 'Purchase Date'],
+        ['Parag Parikh Flexi Cap Fund Direct Growth', '1', '100', '50', '50000', '15-04-2021'],
+      ],
+      lineNumbers: [1, 2],
+    };
+
+    expect(pickBestTable([holdings, richer], 'mf')?.label).toBe('book.xlsx › Detail');
+  });
+
+  it('ignores a sheet whose header has no rows under it', () => {
+    const headerOnly: SourceTable = {
+      label: 'book.xlsx › Empty',
+      rows: [['Scheme Name', 'Units', 'Current Value']],
+      lineNumbers: [1],
+    };
+
+    expect(pickBestTable([headerOnly], 'mf')).toBeNull();
+  });
+
+  it('returns null when nothing looks like the data', () => {
+    expect(pickBestTable([summary], 'mf')).toBeNull();
+  });
+});
+
+describe('importMfTables — spreadsheets', () => {
+  const workbook = (): ArrayBuffer => {
+    const bytes = readFileSync(resolve(__dirname, '__fixtures__/holdings.xlsx'));
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  };
+
+  it('imports from an xlsx, picking the right sheet and reading date serials', async () => {
+    const sheets = await readXlsx(workbook());
+    const report = importMfTables(tablesFromSheets(sheets, 'book.xlsx'), index, NOW);
+
+    expect(report.error).toBeNull();
+    expect(report.rows).toHaveLength(3);
+
+    const [first] = report.rows;
+    expect(first.fundId).toBe('ppfcf');
+    expect(first.units).toBeCloseTo(567.89);
+    // 45397 with a date style, not the raw serial.
+    expect(first.purchaseDate).toBe('2024-04-15');
+    expect(first.folio).toBe('12345');
+    // Provenance carries the sheet, not just the file.
+    expect(first.sourceFile).toBe('book.xlsx › Holdings');
+  });
+
+  it('reports the spreadsheet row number for a skipped row', async () => {
+    const sheets = await readXlsx(workbook());
+    // Sheet has no scheme this index knows for the third row? All three match
+    // here, so assert the line numbers of the rows we did read instead.
+    const report = importMfTables(tablesFromSheets(sheets, 'book.xlsx'), index, NOW);
+    expect(report.skipped).toHaveLength(0);
+    expect(report.recognisedColumns.purchaseDate).toBe('Purchase Date');
+  });
+
+  it('explains an .xls file rather than failing obscurely', async () => {
+    // The old binary format is not a zip at all.
+    const notXlsx = new TextEncoder().encode('\xD0\xCF\x11\xE0 old binary xls').buffer;
+    await expect(readXlsx(notXlsx as ArrayBuffer)).rejects.toThrow();
+  });
+});
+
+describe('mergeMfHoldings', () => {
+  const row = (overrides: Partial<MfHolding> = {}): MfHolding => ({
+    id: 'mf-1',
+    fundId: 'ppfcf',
+    schemeCode: 122639,
+    sourceName: 'Parag Parikh Flexi Cap Fund',
+    matchConfidence: 1,
+    looksRegularPlan: false,
+    sourceFile: 'a.csv',
+    units: 100,
+    investedAmount: 50_000,
+    currentValue: 70_000,
+    purchaseDate: '2021-04-15',
+    folio: '12345',
+    ...overrides,
+  });
+
+  it('drops a row that is identical across two files', () => {
+    // Uploading the same statement twice would otherwise double every figure.
+    const merged = mergeMfHoldings([row(), row({ sourceFile: 'b.csv' })]);
+
+    expect(merged.rows).toHaveLength(1);
+    expect(merged.duplicatesDropped).toBe(1);
+    expect(merged.conflicts).toHaveLength(0);
+  });
+
+  it('reports a restated position instead of summing or silently dropping it', () => {
+    /*
+     * A January and an August statement of the same folio. Summing invents money;
+     * dropping quietly picks a version. Keep the first and say so.
+     */
+    const merged = mergeMfHoldings([
+      row({ sourceFile: 'jan.csv', units: 100, currentValue: 70_000 }),
+      row({ sourceFile: 'aug.csv', units: 140, currentValue: 96_000 }),
+    ]);
+
+    expect(merged.rows).toHaveLength(1);
+    expect(merged.rows[0].currentValue).toBe(70_000);
+    expect(merged.conflicts).toHaveLength(1);
+    expect(merged.conflicts[0]).toMatchObject({ keptFrom: 'jan.csv', droppedFrom: 'aug.csv' });
+  });
+
+  it('keeps separate folios of the same fund', () => {
+    const merged = mergeMfHoldings([
+      row({ folio: '111' }),
+      row({ sourceFile: 'b.csv', folio: '222' }),
+    ]);
+
+    expect(merged.rows).toHaveLength(2);
+    expect(merged.conflicts).toHaveLength(0);
+  });
+
+  it('keeps repeated rows from within one file, which are separate lots', () => {
+    // A transaction-level statement lists one row per purchase, and each has its
+    // own acquisition date and so its own tax lot.
+    const merged = mergeMfHoldings([
+      row({ purchaseDate: '2021-04-15', units: 50 }),
+      row({ purchaseDate: '2023-06-01', units: 50 }),
+    ]);
+
+    expect(merged.rows).toHaveLength(2);
+    expect(merged.conflicts).toHaveLength(0);
+  });
+
+  it('keeps both when there is no folio to identify a restatement by', () => {
+    const merged = mergeMfHoldings([
+      row({ folio: null, units: 100 }),
+      row({ sourceFile: 'b.csv', folio: null, units: 140 }),
+    ]);
+
+    expect(merged.rows).toHaveLength(2);
+    expect(merged.conflicts).toHaveLength(0);
+  });
+
+  it('renumbers ids so they stay unique after merging', () => {
+    const merged = mergeMfHoldings([
+      row({ id: 'mf-1', folio: '111' }),
+      row({ id: 'mf-1', sourceFile: 'b.csv', folio: '222' }),
+    ]);
+
+    expect(merged.rows.map((r) => r.id)).toEqual(['mf-1', 'mf-2']);
+  });
+});
+
+describe('upsertFiles', () => {
+  const file = (name: string, marker: string) => ({ name, marker });
+
+  it('appends a newly added file', () => {
+    const after = upsertFiles([file('a.csv', '1')], [file('b.csv', '2')]);
+    expect(after.map((f) => f.name)).toEqual(['a.csv', 'b.csv']);
+  });
+
+  it('replaces a file picked again rather than counting it twice', () => {
+    const after = upsertFiles([file('a.csv', 'old')], [file('a.csv', 'new')]);
+    expect(after).toHaveLength(1);
+    expect(after[0].marker).toBe('new');
+  });
+
+  it('keeps a replaced file in its original position', () => {
+    // Otherwise the on-screen list reshuffles under the user.
+    const after = upsertFiles(
+      [file('a.csv', '1'), file('b.csv', '2'), file('c.csv', '3')],
+      [file('b.csv', 'updated')],
+    );
+    expect(after.map((f) => f.name)).toEqual(['a.csv', 'b.csv', 'c.csv']);
+    expect(after[1].marker).toBe('updated');
+  });
+
+  it('handles a batch containing both a new and a replaced file', () => {
+    const after = upsertFiles(
+      [file('a.csv', '1')],
+      [file('a.csv', 'updated'), file('b.csv', '2')],
+    );
+    expect(after.map((f) => `${f.name}:${f.marker}`)).toEqual(['a.csv:updated', 'b.csv:2']);
+  });
+});
+
+describe('adding a file recomputes over the whole set', () => {
+  /**
+   * The sequence the upload pane performs: read a file, fold it into the files
+   * already loaded, then merge *every* file's rows and hand that up. What the
+   * analysis sees must be the union, not just the latest file.
+   */
+  const csv = (scheme: string, folio: string, units: string) =>
+    [
+      'Scheme Name,Folio No.,Units,Current Value,Purchase Date',
+      `"${scheme}",${folio},${units},50000,15-04-2021`,
+    ].join('\n');
+
+  const load = (name: string, text: string) => ({
+    name,
+    rows: importMfHoldings(text, index, NOW, name).rows,
+  });
+
+  const publishedRows = (files: Array<{ name: string; rows: MfHolding[] }>) =>
+    mergeMfHoldings(files.flatMap((file) => file.rows)).rows;
+
+  it('covers both files after a second upload', () => {
+    let files = upsertFiles([], [load('one.csv', csv('Parag Parikh Flexi Cap Fund', 'F1', '100'))]);
+    expect(publishedRows(files)).toHaveLength(1);
+
+    files = upsertFiles(
+      files,
+      [load('two.csv', csv('HDFC Mid-Cap Opportunities Fund', 'F2', '200'))],
+    );
+
+    const rows = publishedRows(files);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.fundId).sort()).toEqual(['hdfc-midcap', 'ppfcf']);
+    // Provenance survives the merge, so each row is still attributable.
+    expect(rows.map((row) => row.sourceFile).sort()).toEqual(['one.csv', 'two.csv']);
+  });
+
+  it('shrinks back to the remaining files when one is removed', () => {
+    const files = upsertFiles(
+      [],
+      [
+        load('one.csv', csv('Parag Parikh Flexi Cap Fund', 'F1', '100')),
+        load('two.csv', csv('HDFC Mid-Cap Opportunities Fund', 'F2', '200')),
+      ],
+    );
+
+    expect(publishedRows(files)).toHaveLength(2);
+    expect(publishedRows(files.filter((file) => file.name !== 'two.csv'))).toHaveLength(1);
+  });
+
+  it('does not double-count when the same file is uploaded twice', () => {
+    const first = load('one.csv', csv('Parag Parikh Flexi Cap Fund', 'F1', '100'));
+    const files = upsertFiles([first], [load('one.csv', csv('Parag Parikh Flexi Cap Fund', 'F1', '100'))]);
+
+    expect(publishedRows(files)).toHaveLength(1);
+  });
+
+  it('does not double-count the same holding arriving under two file names', () => {
+    // Different file name, identical row — the merge catches what upsert cannot.
+    const files = upsertFiles(
+      [],
+      [
+        load('one.csv', csv('Parag Parikh Flexi Cap Fund', 'F1', '100')),
+        load('copy.csv', csv('Parag Parikh Flexi Cap Fund', 'F1', '100')),
+      ],
+    );
+
+    const merged = mergeMfHoldings(files.flatMap((file) => file.rows));
+    expect(merged.rows).toHaveLength(1);
+    expect(merged.duplicatesDropped).toBe(1);
+  });
+});
+
+describe('mergeSipHoldings', () => {
+  const row = (overrides: Partial<SipHolding> = {}): SipHolding => ({
+    id: 'sip-1',
+    fundId: 'ppfcf',
+    schemeCode: 122639,
+    sourceName: 'Parag Parikh Flexi Cap Fund',
+    matchConfidence: 1,
+    looksRegularPlan: false,
+    sourceFile: 'a.csv',
+    amount: 10_000,
+    frequency: 'monthly',
+    startDate: '2021-04-15',
+    active: true,
+    ...overrides,
+  });
+
+  it('drops an identical SIP from a second file', () => {
+    const merged = mergeSipHoldings([row(), row({ sourceFile: 'b.csv' })]);
+
+    expect(merged.rows).toHaveLength(1);
+    expect(merged.duplicatesDropped).toBe(1);
+  });
+
+  it('reports the same SIP restated at a different amount', () => {
+    const merged = mergeSipHoldings([
+      row({ sourceFile: 'old.csv', amount: 10_000 }),
+      row({ sourceFile: 'new.csv', amount: 15_000 }),
+    ]);
+
+    expect(merged.rows).toHaveLength(1);
+    expect(merged.conflicts).toHaveLength(1);
+  });
+
+  it('keeps two SIPs into one fund started on different dates', () => {
+    // A genuinely separate registration, not a restatement.
+    const merged = mergeSipHoldings([
+      row({ startDate: '2021-04-15' }),
+      row({ sourceFile: 'b.csv', startDate: '2024-01-10', amount: 5_000 }),
+    ]);
+
+    expect(merged.rows).toHaveLength(2);
+    expect(merged.conflicts).toHaveLength(0);
   });
 });
 
