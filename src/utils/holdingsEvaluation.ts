@@ -2017,7 +2017,7 @@ const buildSuggestions = (input: SuggestionInput): Suggestion[] => {
     });
   }
 
-  const keepers = holdings.filter((holding) => holding.verdict === 'keep');
+  const keepers = holdings.filter((holding) => holding.verdict === 'keep' || holding.verdict === 'buy');
   if (keepers.length > 0 && exits.length === 0 && duplicates.length === 0) {
     suggestions.push({
       id: 'nothing-pressing',

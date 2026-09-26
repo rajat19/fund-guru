@@ -380,7 +380,7 @@ describe('evaluatePortfolio — ranking', () => {
 describe('evaluatePortfolio — holding verdicts', () => {
   it('keeps a top-ranked fund', () => {
     const result = evaluate([holding({ fundId: 'peer-19' })]);
-    expect(result.holdings[0].verdict).toBe('keep');
+    expect(result.holdings[0].verdict).toBe('buy');
     expect(result.holdings[0].standing).toBeGreaterThan(WEAK_STANDING);
   });
 
@@ -678,7 +678,7 @@ describe('evaluatePortfolio — overlap', () => {
     );
 
     const higher = result.holdings.find((h) => h.holding.id === 'mf-1')!;
-    expect(higher.verdict).toBe('keep');
+    expect(higher.verdict).toBe('buy');
   });
 
   it('says overlap is unknown rather than assuming none', () => {
