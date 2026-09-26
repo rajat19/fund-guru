@@ -60,7 +60,6 @@ type SortDirection = 'asc' | 'desc';
 
 export function FundExplorer() {
   const [filters, setFilters] = useState<MutualFundsFilters>({});
-  const [showFilters, setShowFilters] = useState(false);
   const [selectedFunds, setSelectedFunds] = useState<string[]>([]);
   const [showComparison, setShowComparison] = useState(false);
   const [sortField, setSortField] = useState<SortField>('returns');
@@ -220,65 +219,40 @@ export function FundExplorer() {
             </Badge>
           </div>
         </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                <Input
-                  placeholder="Search funds by name or fund house..."
-                  value={filters.searchTerm || ''}
-                  onChange={(e) => handleFilterChange('searchTerm', e.target.value)}
-                  className="pl-10"
-                />
+        <CardContent className="p-0">
+          <div className="sticky top-0 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b shadow-sm pt-6 px-6 pb-4 space-y-6 rounded-t-xl">
+            {/* Search and Compare */}
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="flex-1">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                  <Input
+                    placeholder="Search funds by name or fund house..."
+                    value={filters.searchTerm || ''}
+                    onChange={(e) => handleFilterChange('searchTerm', e.target.value)}
+                    className="pl-10 h-10 bg-background"
+                  />
+                </div>
               </div>
-            </div>
-            <Button
-              variant="outline"
-              onClick={() => setShowFilters(!showFilters)}
-              className="whitespace-nowrap relative"
-            >
-              <SlidersHorizontal className="h-4 w-4 mr-2" />
-              Filters
-              {activeFiltersCount > 0 && (
-                <Badge variant="secondary" className="ml-2 h-5 w-5 p-0 text-xs">
-                  {activeFiltersCount}
-                </Badge>
+              {selectedFunds.length > 0 && (
+                <Dialog open={showComparison} onOpenChange={setShowComparison}>
+                  <DialogTrigger asChild>
+                    <Button variant="default" className="whitespace-nowrap h-10 shadow-sm">
+                      <GitCompare className="h-4 w-4 mr-2" />
+                      Compare ({selectedFunds.length})
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+                    <DialogHeader>
+                      <DialogTitle>Fund Comparison</DialogTitle>
+                    </DialogHeader>
+                    <FundComparison funds={selectedFundObjects} />
+                  </DialogContent>
+                </Dialog>
               )}
-            </Button>
-            {selectedFunds.length > 0 && (
-              <Dialog open={showComparison} onOpenChange={setShowComparison}>
-                <DialogTrigger asChild>
-                  <Button variant="default" className="whitespace-nowrap">
-                    <GitCompare className="h-4 w-4 mr-2" />
-                    Compare ({selectedFunds.length})
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>Fund Comparison</DialogTitle>
-                  </DialogHeader>
-                  <FundComparison funds={selectedFundObjects} />
-                </DialogContent>
-              </Dialog>
-            )}
-          </div>
+            </div>
 
-          {/* Sort Options */}
-          <div className="flex flex-wrap gap-2">
-            <span className="text-sm text-muted-foreground self-center">Sort by:</span>
-            <SortButton field="peerScore">Peer Score</SortButton>
-            <SortButton field="returns">1Y Return</SortButton>
-            <SortButton field="returns3Y">3Y Return</SortButton>
-            <SortButton field="returns5Y">5Y Return</SortButton>
-            <SortButton field="expenseRatio">Expense Ratio</SortButton>
-            <SortButton field="sharpeRatio">Sharpe</SortButton>
-            <SortButton field="alpha">Alpha</SortButton>
-            <SortButton field="aum">AUM</SortButton>
-            <SortButton field="fundName">Name</SortButton>
-          </div>
-
-          {showFilters && (
+            {/* Grid Filters */}
             <div className="space-y-4 p-4 bg-muted/30 rounded-lg">
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                 <div className="space-y-2">
@@ -409,24 +383,37 @@ export function FundExplorer() {
                   <Input type="number" placeholder="500" value={filters.minAUM || ''} onChange={(e) => handleFilterChange('minAUM', e.target.value ? Number(e.target.value) : undefined)} />
                 </div>
               </div>
-
-              <div className="flex items-center gap-4">
-                <Button
-                  onClick={clearFilters}
-                  variant="ghost"
-                  size="sm"
-                  disabled={activeFiltersCount === 0}
-                >
-                  Clear All Filters
-                </Button>
-                {activeFiltersCount > 0 && (
-                  <Badge variant="outline">{sortedFunds.length} funds found</Badge>
-                )}
-              </div>
+              
+              {activeFiltersCount > 0 && (
+                <div className="pt-2">
+                  <Button
+                    onClick={clearFilters}
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 whitespace-nowrap text-muted-foreground hover:text-foreground"
+                  >
+                    Clear All Filters
+                  </Button>
+                </div>
+              )}
             </div>
-          )}
 
-          <div className="space-y-4">
+            {/* Sort Options */}
+            <div className="flex flex-wrap gap-2 items-center pt-2">
+              <span className="text-sm font-medium text-muted-foreground mr-1">Sort by:</span>
+              <SortButton field="peerScore">Peer Score</SortButton>
+              <SortButton field="returns">1Y Return</SortButton>
+              <SortButton field="returns3Y">3Y Return</SortButton>
+              <SortButton field="returns5Y">5Y Return</SortButton>
+              <SortButton field="expenseRatio">Expense Ratio</SortButton>
+              <SortButton field="sharpeRatio">Sharpe</SortButton>
+              <SortButton field="alpha">Alpha</SortButton>
+              <SortButton field="aum">AUM</SortButton>
+              <SortButton field="fundName">Name</SortButton>
+            </div>
+          </div>
+
+          <div className="p-6 space-y-4">
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">

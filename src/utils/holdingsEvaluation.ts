@@ -197,13 +197,14 @@ export interface OverlapWith {
   otherRanksHigher: boolean;
 }
 
-export type HoldingVerdict = 'keep' | 'watch' | 'trim' | 'exit' | 'unjudged';
+export type HoldingVerdict = 'buy' | 'keep' | 'watch' | 'trim' | 'exit' | 'unjudged';
 
 export const HOLDING_VERDICT_LABEL: Record<HoldingVerdict, string> = {
-  keep: 'Keep',
-  watch: 'Keep for now',
-  trim: 'Trim',
-  exit: 'Worth switching',
+  buy: 'Buy / Strong Hold',
+  keep: 'Hold',
+  watch: 'Hold (Costly to switch)',
+  trim: 'Sell (Partial)',
+  exit: 'Sell',
   unjudged: 'Not judged',
 };
 
@@ -1072,7 +1073,7 @@ const holdingVerdict = (
 
   if (standing >= STRONG_STANDING) {
     return {
-      verdict: 'keep',
+      verdict: 'buy',
       reason: `Top ${Math.max(1, Math.round(100 - standing))}% of ${breakdown.peerGroup} across ${Math.round(breakdown.coverage * 100)}% of the scored metrics.`,
     };
   }

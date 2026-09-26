@@ -38,41 +38,13 @@ export const fundHouseShortName = (fundHouse: string | null | undefined): string
  * Falls back to the full scheme name whenever stripping would leave nothing —
  * better a long label than an empty one.
  */
-/** Words that must never start a shortened name — a sign of a bad split. */
-const CONNECTIVE = /^(of|and|&|the|for|in)\b/i;
 
-/**
- * Strip the fund house prefix, matching as many of its leading words as the
- * scheme name actually starts with.
- *
- * An exact match is too strict: the house is "Kotak Mahindra Mutual Fund" while
- * its schemes are named "Kotak ...", so requiring the whole thing would strip
- * nothing. Longest-first ensures "Bank of India Small Cap Fund" loses all three
- * words rather than just "Bank" and leaving "of India Small Cap Fund".
- */
-const stripHousePrefix = (name: string, house: string): string => {
-  if (!house) return name;
-
-  const words = house.split(/\s+/).filter(Boolean);
-
-  for (let take = words.length; take > 0; take--) {
-    const prefix = words.slice(0, take).join(' ');
-    if (!name.toLowerCase().startsWith(prefix.toLowerCase())) continue;
-
-    const rest = name.slice(prefix.length).trim();
-    // Reject a split that leaves a dangling connective, and never strip
-    // everything — both mean we matched the wrong boundary.
-    if (rest && !CONNECTIVE.test(rest)) return rest;
-  }
-
-  return name;
-};
 
 export const schemeShortName = (fund: MutualFund): string => {
   const full = (fund.schemeName ?? '').trim();
   if (!full) return fund.fundName ?? '';
 
-  const rest = stripHousePrefix(full, fundHouseShortName(fund.fundHouse))
+  const rest = full
     .replace(/[-–—]/g, ' ')
     .replace(PLAN_NOISE, ' ')
     .replace(/\s+/g, ' ')

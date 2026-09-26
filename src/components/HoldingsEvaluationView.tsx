@@ -1,7 +1,29 @@
+import { useState, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion';
 import {
   Bar,
   BarChart,
@@ -16,8 +38,10 @@ import {
 import {
   AlertTriangle,
   ArrowRight,
+  ArrowUpDown,
   BarChart3,
   CheckCircle2,
+  Filter,
   Info,
   Layers,
   PieChart as PieChartIcon,
@@ -58,11 +82,12 @@ import { SIP_FREQUENCY_LABEL } from '@/types/userHoldings';
  */
 
 const VERDICT_STYLE: Record<HoldingVerdict, string> = {
-  keep: 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800',
+  buy: 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800',
+  keep: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800',
   watch:
     'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800',
-  trim: 'bg-sky-100 text-sky-800 border-sky-200 dark:bg-sky-900/30 dark:text-sky-300 dark:border-sky-800',
-  exit: 'bg-rose-100 text-rose-800 border-rose-200 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-800',
+  trim: 'bg-rose-100 text-rose-800 border-rose-200 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-800',
+  exit: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800',
   unjudged: 'bg-muted text-muted-foreground',
 };
 
@@ -76,10 +101,11 @@ const SIP_VERDICT_STYLE: Record<SipVerdict, string> = {
 /** Chart fill per verdict. Hex rather than a CSS variable, since Recharts
  *  writes these straight into an SVG `fill` attribute. */
 const VERDICT_FILL: Record<HoldingVerdict, string> = {
-  keep: '#10b981',
-  watch: '#f59e0b',
-  trim: '#0ea5e9',
-  exit: '#f43f5e',
+  buy: '#10b981', // emerald-500
+  keep: '#3b82f6', // blue-500
+  watch: '#f59e0b', // amber-500
+  trim: '#f43f5e', // rose-500
+  exit: '#ef4444', // red-500
   unjudged: '#94a3b8',
 };
 
@@ -283,6 +309,256 @@ function HoldingRow({
   );
 }
 
+function FolioRow({
+  evaluated,
+  onRemove,
+  hideReason,
+  hiddenSignals,
+}: {
+  evaluated: EvaluatedHolding;
+  onRemove: (id: string) => void;
+  hideReason: boolean;
+  hiddenSignals: Set<string>;
+}) {
+  const { holding } = evaluated;
+
+  const visibleSignals = evaluated.signals.filter(s => !hiddenSignals.has(s.message));
+
+  return (
+    <div className="py-3 pr-4 space-y-2 hover:bg-muted/10">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium leading-snug">Folio {holding.folio || 'Unspecified'}</span>
+            <Badge variant="outline" className={VERDICT_STYLE[evaluated.verdict]}>
+              {HOLDING_VERDICT_LABEL[evaluated.verdict]}
+            </Badge>
+          </div>
+        </div>
+
+        <div className="text-right shrink-0">
+          <div className="font-semibold font-mono tabular-nums">
+            {evaluated.currentValue != null ? formatCurrency(evaluated.currentValue) : '—'}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {evaluated.gainPercent != null ? (
+              <span className={evaluated.gainPercent >= 0 ? 'text-profit' : 'text-loss'}>
+                {evaluated.gainPercent >= 0 ? '+' : ''}
+                {evaluated.gainPercent.toFixed(1)}%
+              </span>
+            ) : (
+              'gain unknown'
+            )}
+            {evaluated.weightPercent > 0 && <> · {evaluated.weightPercent.toFixed(1)}% of total</>}
+          </div>
+        </div>
+
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 -mr-2"
+          aria-label={`Remove lot`}
+          onClick={() => onRemove(holding.id)}
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {!hideReason && (
+        <p className="text-xs text-muted-foreground leading-relaxed">{evaluated.verdictReason}</p>
+      )}
+
+      {visibleSignals.length > 0 && (
+        <ul className="space-y-1">
+          {visibleSignals.map((signal) => (
+            <li key={signal.kind + signal.message} className={`text-xs ${TONE_CLASS[signal.tone]}`}>
+              · {signal.message}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {evaluated.switchCost?.totalAmount != null && evaluated.switchCost.totalAmount > 0 && (
+        <div className="text-xs text-muted-foreground rounded-md bg-muted/40 px-2.5 py-1.5 inline-block">
+          Leaving today costs {formatCurrency(evaluated.switchCost.totalAmount)} —{' '}
+          {formatCurrency(evaluated.switchCost.exitLoadAmount)} exit load and{' '}
+          {formatCurrency(evaluated.switchCost.taxAmount ?? 0)}{' '}
+          {evaluated.switchCost.isLongTerm ? 'long-term' : 'short-term'} capital gains tax
+          {evaluated.switchCost.percentOfValue != null && (
+            <> ({evaluated.switchCost.percentOfValue.toFixed(1)}% of position)</>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GroupedHoldingRow({
+  group,
+  onRemove,
+}: {
+  group: EvaluatedHolding[];
+  onRemove: (id: string) => void;
+}) {
+  const primary = group[0];
+  const { fund, standing, breakdown, betterPeer, cheaperTracker } = primary;
+  const label = fund ? schemeLabel(fund) : null;
+
+  const totalValue = group.reduce((sum, h) => sum + (h.currentValue ?? 0), 0);
+  const totalCost = group.reduce((sum, h) => sum + (h.invested ?? 0), 0);
+  const totalGain = totalCost > 0 && totalValue > 0 ? totalValue - totalCost : null;
+  const totalGainPercent = totalGain != null ? (totalGain / totalCost) * 100 : null;
+  const totalWeight = group.reduce((sum, h) => sum + h.weightPercent, 0);
+
+  // Unique verdicts
+  const verdicts = Array.from(new Set(group.map(h => h.verdict)));
+  
+  // Check if verdict reason is identical across all folios
+  const commonReason = group.every(h => h.verdictReason === primary.verdictReason) ? primary.verdictReason : null;
+
+  // Find signals that are common to ALL folios in the group
+  const allSignalMessages = group.map(h => h.signals.map(s => s.message));
+  const commonSignalMessages = new Set(
+    allSignalMessages[0].filter(msg => allSignalMessages.every(folioSignals => folioSignals.includes(msg)))
+  );
+  
+  // Extract the common signals objects (using the first folio as the source)
+  const commonSignals = primary.signals.filter(s => commonSignalMessages.has(s.message));
+
+  return (
+    <AccordionItem value={primary.holding.id} className="border-b-0">
+      <AccordionTrigger className="hover:no-underline px-4 py-3.5 hover:bg-muted/30 items-start [&>svg]:mt-1.5">
+        <div className="flex-1 min-w-0 space-y-2 text-left pr-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                {fund ? (
+                  <Link to={`/fund/${fund.id}`} className="font-medium leading-snug hover:underline" onClick={e => e.stopPropagation()}>
+                    {label!.scheme}
+                  </Link>
+                ) : (
+                  <span className="font-medium leading-snug">{primary.holding.sourceName}</span>
+                )}
+                
+                {verdicts.map(v => (
+                   <Badge key={v} variant="outline" className={VERDICT_STYLE[v]}>
+                     {HOLDING_VERDICT_LABEL[v]}
+                   </Badge>
+                ))}
+                
+                {primary.rank > 0 && (
+                  <span className="text-xs text-muted-foreground">#{primary.rank} of yours</span>
+                )}
+              </div>
+
+              <div className="text-xs text-muted-foreground mt-0.5">
+                {label ? (
+                  <>
+                    {label.house} · {fund!.subCategory}
+                    {standing != null && <> · stands {Math.round(standing)}/100 in its sub-category</>}
+                    {breakdown && <> · {breakdown.peerCount} peers</>}
+                  </>
+                ) : (
+                  <>Unmatched — excluded from every figure</>
+                )}
+                <> · {group.length} folios/lots</>
+              </div>
+            </div>
+
+            <div className="text-right shrink-0">
+              <div className="font-semibold font-mono tabular-nums">
+                {totalValue > 0 ? formatCurrency(totalValue) : '—'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {totalGainPercent != null ? (
+                  <span className={totalGainPercent >= 0 ? 'text-profit' : 'text-loss'}>
+                    {totalGainPercent >= 0 ? '+' : ''}
+                    {totalGainPercent.toFixed(1)}%
+                  </span>
+                ) : (
+                  'gain unknown'
+                )}
+                {totalWeight > 0 && <> · {totalWeight.toFixed(1)}% of total</>}
+              </div>
+            </div>
+          </div>
+
+          {/* Fund-level Shared Info in the Trigger so it's always visible */}
+          {commonReason && (
+            <p className="text-xs text-muted-foreground leading-relaxed">{commonReason}</p>
+          )}
+
+          {betterPeer && (
+            <div className="text-xs flex items-start gap-1.5 text-muted-foreground">
+              <ArrowRight className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>
+                Highest-ranked alternative in {betterPeer.fund.subCategory}:{' '}
+                <Link to={`/fund/${betterPeer.fund.id}`} className="hover:underline font-medium" onClick={e => e.stopPropagation()}>
+                  {schemeShortName(betterPeer.fund)}
+                </Link>{' '}
+                at {Math.round(betterPeer.standing)}/100
+                {betterPeer.annualAdvantage != null && (
+                  <>
+                    {' '}
+                    ({betterPeer.annualAdvantage > 0 ? '+' : ''}
+                    {betterPeer.annualAdvantage.toFixed(1)} points on{' '}
+                    {betterPeer.advantageBasis})
+                  </>
+                )}
+                . Ranking, not a recommendation.
+              </span>
+            </div>
+          )}
+
+          {cheaperTracker && (
+            <div className="text-xs flex items-start gap-1.5 text-muted-foreground">
+              <ArrowRight className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>
+                Same benchmark, lower fee:{' '}
+                <Link
+                  to={`/fund/${cheaperTracker.fund.id}`}
+                  className="hover:underline font-medium"
+                  onClick={e => e.stopPropagation()}
+                >
+                  {schemeShortName(cheaperTracker.fund)}
+                </Link>{' '}
+                at {formatPercent(cheaperTracker.expenseRatio)} against{' '}
+                {formatPercent(fund?.expenseRatio)}
+              </span>
+            </div>
+          )}
+
+          {commonSignals.length > 0 && (
+            <ul className="space-y-1">
+              {commonSignals.map((signal) => (
+                <li key={signal.kind + signal.message} className={`text-xs ${TONE_CLASS[signal.tone]}`}>
+                  · {signal.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </AccordionTrigger>
+      <AccordionContent className="bg-muted/10 border-t border-border/50 pb-0">
+        <div className="px-6 py-4">
+          {/* Individual Folio Rows */}
+          <div className="border-l-2 border-border/50 pl-4 space-y-1 divide-y divide-border/50">
+            {group.map(holding => (
+              <FolioRow 
+                key={holding.holding.id} 
+                evaluated={holding} 
+                onRemove={onRemove} 
+                hideReason={commonReason != null}
+                hiddenSignals={commonSignalMessages}
+              />
+            ))}
+          </div>
+        </div>
+      </AccordionContent>
+    </AccordionItem>
+  );
+}
+
 function SipRow({
   evaluated,
   onRemove,
@@ -392,6 +668,85 @@ export function HoldingsEvaluationView({
 
   const hasTarget = allocation.some((row) => row.targetPercent != null);
 
+  const [selectedFundHouses, setSelectedFundHouses] = useState<string[]>([]);
+  const [selectedFundTypes, setSelectedFundTypes] = useState<string[]>([]);
+  const [sortBy, setSortBy] = useState<string>('rank');
+
+  const fundHouses = useMemo(() => {
+    const set = new Set<string>();
+    evaluation.holdings.forEach(h => {
+      const house = h.fund ? schemeLabel(h.fund).house : 'Unmatched';
+      if (house) set.add(house);
+    });
+    return Array.from(set).sort();
+  }, [evaluation.holdings]);
+
+  const fundTypes = useMemo(() => {
+    const set = new Set<string>();
+    evaluation.holdings.forEach(h => {
+      const type = h.fund?.category || 'Unmatched';
+      set.add(type);
+    });
+    return Array.from(set).sort();
+  }, [evaluation.holdings]);
+
+  const filteredAndSortedHoldings = useMemo(() => {
+    let result = [...evaluation.holdings];
+
+    if (selectedFundHouses.length > 0) {
+      result = result.filter(h => {
+        const house = h.fund ? schemeLabel(h.fund).house : 'Unmatched';
+        return house && selectedFundHouses.includes(house);
+      });
+    }
+
+    if (selectedFundTypes.length > 0) {
+      result = result.filter(h => {
+        const type = h.fund?.category || 'Unmatched';
+        return selectedFundTypes.includes(type);
+      });
+    }
+
+    result.sort((a, b) => {
+      if (sortBy === 'rank') {
+        if (a.rank === 0) return 1;
+        if (b.rank === 0) return -1;
+        return a.rank - b.rank;
+      } else if (sortBy === 'return-high') {
+        return (b.gainPercent ?? -Infinity) - (a.gainPercent ?? -Infinity);
+      } else if (sortBy === 'return-low') {
+        return (a.gainPercent ?? Infinity) - (b.gainPercent ?? Infinity);
+      } else if (sortBy === 'value-high') {
+        return (b.currentValue ?? -Infinity) - (a.currentValue ?? -Infinity);
+      } else if (sortBy === 'value-low') {
+        return (a.currentValue ?? Infinity) - (b.currentValue ?? Infinity);
+      }
+      return 0;
+    });
+
+    return result;
+  }, [evaluation.holdings, selectedFundHouses, selectedFundTypes, sortBy]);
+
+  const groupedHoldings = useMemo(() => {
+    const groups: Record<string, EvaluatedHolding[]> = {};
+    filteredAndSortedHoldings.forEach(holding => {
+      const key = holding.fund ? holding.fund.id : holding.holding.sourceName;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(holding);
+    });
+    
+    const result: EvaluatedHolding[][] = [];
+    const seen = new Set<string>();
+    filteredAndSortedHoldings.forEach(holding => {
+      const key = holding.fund ? holding.fund.id : holding.holding.sourceName;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(groups[key]);
+      }
+    });
+    return result;
+  }, [filteredAndSortedHoldings]);
+
   return (
     <div className="space-y-6">
       {/* Summary */}
@@ -493,7 +848,7 @@ export function HoldingsEvaluationView({
       )}
 
       {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {standingChart.length > 0 && (
           <Card>
             <CardHeader>
@@ -535,138 +890,224 @@ export function HoldingsEvaluationView({
           </Card>
         )}
 
-        {allocationChart.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <PieChartIcon className="h-5 w-5" />
-                Asset mix{hasTarget ? ' against your target' : ''}
-              </CardTitle>
-              <p className="text-xs text-muted-foreground">
-                By current value, over the holdings that matched a scheme.
-                {hasTarget && ' Drift can be corrected with new money rather than by selling.'}
-              </p>
-            </CardHeader>
-            <CardContent>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={allocationChart} margin={{ left: 0, right: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                    <YAxis unit="%" tick={{ fontSize: 11 }} />
-                    <Tooltip
-                      formatter={(value: number) => `${value.toFixed(1)}%`}
-                      contentStyle={{ fontSize: 12 }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar dataKey="current" name="Yours" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                    {hasTarget && (
-                      <Bar dataKey="target" name="Target" fill="#94a3b8" radius={[4, 4, 0, 0]} />
-                    )}
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div className="mt-3 space-y-1.5">
-                {allocation.map((row) => (
-                  <div key={row.assetClass} className="flex justify-between text-xs">
-                    <span className="text-muted-foreground">
-                      {ASSET_CLASS_LABEL[row.assetClass]}
-                    </span>
-                    <span className="tabular-nums">
-                      {formatCurrency(row.amount)} · {row.currentPercent.toFixed(1)}%
-                      {row.driftPoints != null && (
-                        <span
-                          className={
-                            Math.abs(row.driftPoints) >= 10
-                              ? 'text-amber-600 dark:text-amber-400'
-                              : 'text-muted-foreground'
-                          }
-                        >
-                          {' '}
-                          ({row.driftPoints > 0 ? '+' : ''}
-                          {row.driftPoints.toFixed(0)} pts)
-                        </span>
+        <div className="space-y-6">
+          {allocationChart.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <PieChartIcon className="h-5 w-5" />
+                  Asset mix{hasTarget ? ' against your target' : ''}
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  By current value, over the holdings that matched a scheme.
+                  {hasTarget && ' Drift can be corrected with new money rather than by selling.'}
+                </p>
+              </CardHeader>
+              <CardContent>
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={allocationChart} margin={{ left: 0, right: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <YAxis unit="%" tick={{ fontSize: 11 }} />
+                      <Tooltip
+                        formatter={(value: number) => `${value.toFixed(1)}%`}
+                        contentStyle={{ fontSize: 12 }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      <Bar dataKey="current" name="Yours" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                      {hasTarget && (
+                        <Bar dataKey="target" name="Target" fill="#94a3b8" radius={[4, 4, 0, 0]} />
                       )}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-      </div>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
 
-      {/* Look-through */}
-      {lookThrough && lookThrough.top.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Layers className="h-5 w-5" />
-              What your equity funds actually hold
-            </CardTitle>
-            <p className="text-xs text-muted-foreground">
-              Every fund&apos;s disclosed holdings, weighted by the money you have in it. Resolves to{' '}
-              {lookThrough.uniqueIssuers} companies, top 10 at{' '}
-              {lookThrough.topTenPercent.toFixed(0)}%. Covers{' '}
-              {lookThrough.coveragePercent.toFixed(0)}% of your equity money, and only the top 20
-              holdings per fund are published — so true concentration is a little higher.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <div style={{ height: Math.max(180, lookThrough.top.length * 28) }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={lookThrough.top} layout="vertical" margin={{ left: 8, right: 24 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                  <XAxis type="number" unit="%" tick={{ fontSize: 11 }} />
-                  <YAxis
-                    type="category"
-                    dataKey="name"
-                    width={160}
-                    tick={{ fontSize: 11 }}
-                    interval={0}
-                  />
-                  <Tooltip
-                    formatter={(value: number) => [`${value.toFixed(1)}%`, 'Of your equity money']}
-                    contentStyle={{ fontSize: 12 }}
-                  />
-                  <Bar dataKey="percent" fill="#6366f1" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+                <div className="mt-3 space-y-1.5">
+                  {allocation.map((row) => (
+                    <div key={row.assetClass} className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">
+                        {ASSET_CLASS_LABEL[row.assetClass]}
+                      </span>
+                      <span className="tabular-nums">
+                        {formatCurrency(row.amount)} · {row.currentPercent.toFixed(1)}%
+                        {row.driftPoints != null && (
+                          <span
+                            className={
+                              Math.abs(row.driftPoints) >= 10
+                                ? 'text-amber-600 dark:text-amber-400'
+                                : 'text-muted-foreground'
+                            }
+                          >
+                            {' '}
+                            ({row.driftPoints > 0 ? '+' : ''}
+                            {row.driftPoints.toFixed(0)} pts)
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Look-through */}
+          {lookThrough && lookThrough.top.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Layers className="h-5 w-5" />
+                  What your equity funds actually hold
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Every fund&apos;s disclosed holdings, weighted by the money you have in it. Resolves to{' '}
+                  {lookThrough.uniqueIssuers} companies, top 10 at{' '}
+                  {lookThrough.topTenPercent.toFixed(0)}%. Covers{' '}
+                  {lookThrough.coveragePercent.toFixed(0)}% of your equity money, and only the top 20
+                  holdings per fund are published — so true concentration is a little higher.
+                </p>
+              </CardHeader>
+              <CardContent>
+                <div style={{ height: Math.max(180, lookThrough.top.length * 28) }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={lookThrough.top} layout="vertical" margin={{ left: 8, right: 24 }}>
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                      <XAxis type="number" unit="%" tick={{ fontSize: 11 }} />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        width={160}
+                        tick={{ fontSize: 11 }}
+                        interval={0}
+                      />
+                      <Tooltip
+                        formatter={(value: number) => [`${value.toFixed(1)}%`, 'Of your equity money']}
+                        contentStyle={{ fontSize: 12 }}
+                      />
+                      <Bar dataKey="percent" fill="#6366f1" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
 
       {/* Holdings */}
       {evaluation.holdings.length > 0 && (
         <Card>
           <CardHeader>
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <CardTitle>Your holdings, ranked</CardTitle>
-              <p className="text-xs text-muted-foreground">
-                Ordered best to worst by peer standing. Selling costs exit load and capital gains
-                tax, so a weak fund is only a switch when the gap is worth the cost.
-              </p>
+            <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+              <div>
+                <CardTitle>Your holdings, ranked</CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Ordered best to worst by peer standing. Selling costs exit load and capital gains
+                  tax, so a weak fund is only a switch when the gap is worth the cost.
+                </p>
+              </div>
+              
+              {/* Filters and Sort */}
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8">
+                      <Filter className="mr-2 h-3.5 w-3.5" />
+                      AMC {selectedFundHouses.length > 0 && `(${selectedFundHouses.length})`}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56 max-h-64 overflow-y-auto">
+                    <DropdownMenuLabel>Filter by Fund House</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {fundHouses.map(house => (
+                      <DropdownMenuCheckboxItem
+                        key={house}
+                        checked={selectedFundHouses.includes(house)}
+                        onCheckedChange={(checked) => {
+                          setSelectedFundHouses(prev => 
+                            checked ? [...prev, house] : prev.filter(h => h !== house)
+                          );
+                        }}
+                      >
+                        {house}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8">
+                      <Filter className="mr-2 h-3.5 w-3.5" />
+                      Type {selectedFundTypes.length > 0 && `(${selectedFundTypes.length})`}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56 max-h-64 overflow-y-auto">
+                    <DropdownMenuLabel>Filter by Fund Type</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {fundTypes.map(type => (
+                      <DropdownMenuCheckboxItem
+                        key={type}
+                        checked={selectedFundTypes.includes(type)}
+                        onCheckedChange={(checked) => {
+                          setSelectedFundTypes(prev => 
+                            checked ? [...prev, type] : prev.filter(t => t !== type)
+                          );
+                        }}
+                      >
+                        {type}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <Select value={sortBy} onValueChange={setSortBy}>
+                  <SelectTrigger className="h-8 w-[180px]">
+                    <div className="flex items-center">
+                      <ArrowUpDown className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
+                      <SelectValue placeholder="Sort by" />
+                    </div>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="rank">Peer Standing</SelectItem>
+                    <SelectItem value="return-high">Return % (High to Low)</SelectItem>
+                    <SelectItem value="return-low">Return % (Low to High)</SelectItem>
+                    <SelectItem value="value-high">Total Value (High to Low)</SelectItem>
+                    <SelectItem value="value-low">Total Value (Low to High)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="divide-y divide-border">
-              {[...evaluation.holdings]
-                .sort((a, b) => {
-                  // Unranked rows last; otherwise best standing first.
-                  if (a.rank === 0) return 1;
-                  if (b.rank === 0) return -1;
-                  return a.rank - b.rank;
-                })
-                .map((holding) => (
-                  <HoldingRow
-                    key={holding.holding.id}
-                    evaluated={holding}
+            <Accordion type="multiple" className="divide-y divide-border">
+              {groupedHoldings.map((group) => {
+                if (group.length === 1) {
+                  return (
+                    <div key={group[0].holding.id}>
+                      <HoldingRow
+                        evaluated={group[0]}
+                        onRemove={onRemoveHolding}
+                      />
+                    </div>
+                  );
+                }
+                
+                return (
+                  <GroupedHoldingRow
+                    key={group[0].fund ? group[0].fund.id : group[0].holding.sourceName}
+                    group={group}
                     onRemove={onRemoveHolding}
                   />
-                ))}
-            </div>
+                );
+              })}
+              {groupedHoldings.length === 0 && (
+                <div className="p-8 text-center text-sm text-muted-foreground">
+                  No holdings match your filters.
+                </div>
+              )}
+            </Accordion>
           </CardContent>
         </Card>
       )}

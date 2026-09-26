@@ -4,7 +4,6 @@ import { delay } from '@/services/groww/constant';
 
 export const getDerivedScheme = async (page: number = 0): Promise<GrowwSchemeResponse> => {
   const params = new URLSearchParams({
-    available_for_investment: 'true',
     doc_type: 'scheme',
     page: page.toString(),
     plan_type: 'Direct',
@@ -53,7 +52,7 @@ export const getAllDerivedSchemes = async (
       const msg = `Fetching derived page ${page + 1}/${totalPages}`;
       console.log(`📄 ${msg}...`);
       if (onProgress) onProgress(msg);
-      
+
       const schemes = await getDerivedScheme(page);
       if (schemes.content) {
         allFunds.push(...schemes.content);

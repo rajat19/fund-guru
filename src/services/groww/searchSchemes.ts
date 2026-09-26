@@ -2,6 +2,23 @@ import { GrowwSearchResponse } from '@/types/api';
 import { DEFAULT_HEADERS, MF_SEARCH_API } from '@/services/groww/constant';
 import { delay } from '@/services/groww/constant';
 
+/** A fund whose search_id redirected to a different scheme during the fetch. */
+export interface RedirectedFund {
+  /** The original search_id we requested. */
+  oldId: string;
+  /** The scheme_name from the original scheme listing (may differ from what the API returns). */
+  oldSchemeName: string;
+  /** Where Groww redirected us — the replacement fund's search_id. */
+  newSearchId: string;
+  /** The replacement fund's scheme_name from the redirect response. */
+  newSchemeName: string | null;
+}
+
+export interface SearchDataResult {
+  data: Record<string, GrowwSearchResponse>;
+  redirects: RedirectedFund[];
+}
+
 export const getSchemeSearchData = async (searchId: string): Promise<GrowwSearchResponse> => {
   const url = MF_SEARCH_API.replace('{search_id}', searchId);
 
@@ -22,15 +39,18 @@ export const batchProcessSearchData = async (
   batchSize: number = 10,
   delayMs: number = 500,
   onProgress?: (msg: string) => void,
-  signal?: AbortSignal
-): Promise<Record<string, GrowwSearchResponse>> => {
+  signal?: AbortSignal,
+  /** Map of search_id → scheme_name from the original listing, so we can name redirected funds. */
+  schemeNamesBySearchId?: Map<string, string>,
+): Promise<SearchDataResult> => {
   if (searchIds.length === 0) {
-    return {};
+    return { data: {}, redirects: [] };
   }
 
   console.log(`🔍 Processing ${searchIds.length} search data in batches of ${batchSize}...`);
 
   const results: Record<string, GrowwSearchResponse> = {};
+  const redirects: RedirectedFund[] = [];
   const totalBatches = Math.ceil(searchIds.length / batchSize);
 
   for (let i = 0; i < searchIds.length; i += batchSize) {
@@ -52,7 +72,14 @@ export const batchProcessSearchData = async (
         
         // Detect if the fund was replaced or is invalid
         if (result.search_id !== searchId || !result.scheme_name) {
-          console.warn(`⚠️ Fund replaced or invalid: ${searchId} (redirects to ${result.search_id || 'unknown'}). Skipping.`);
+          const oldName = schemeNamesBySearchId?.get(searchId) ?? searchId;
+          console.warn(`⚠️ Fund replaced or invalid: ${oldName} (redirects to ${result.search_id || 'unknown'}). Skipping.`);
+          redirects.push({
+            oldId: searchId,
+            oldSchemeName: oldName,
+            newSearchId: result.search_id ?? '',
+            newSchemeName: result.scheme_name ?? null,
+          });
           return null;
         }
         
@@ -77,5 +104,8 @@ export const batchProcessSearchData = async (
   }
 
   console.log(`✅ Successfully processed ${Object.keys(results).length} search data`);
-  return results;
+  if (redirects.length > 0) {
+    console.log(`🔀 Detected ${redirects.length} redirected/replaced fund(s)`);
+  }
+  return { data: results, redirects };
 };

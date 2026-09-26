@@ -74,9 +74,16 @@ const SQUASH_PAIRS: Array<[RegExp, string]> = [
   [/\blarge\s+and\s+mid\s*cap\b/g, 'largeandmidcap'],
   [/\bblue\s+chip\b/g, 'bluechip'],
   [/\bultra\s+short\b/g, 'ultrashort'],
+  [/\bshort\s+(?:term|duration)\b/g, 'shortduration'],
+  [/\bmedium\s+(?:term|duration)\b/g, 'mediumduration'],
+  [/\blong\s+(?:term|duration)\b/g, 'longduration'],
+  [/\bfloating\s+(?:interest\s+)?rates?\b/g, 'floatingrate'],
   [/\bmoney\s+market\b/g, 'moneymarket'],
   [/\bfund\s+of\s+funds?\b/g, 'fof'],
   [/\bexchange\s+traded\s+fund\b/g, 'etf'],
+  [/\btax\s+saver\b/g, 'taxsaver'],
+  [/\btax\s+savings\b/g, 'taxsaver'],
+  [/\bequity\s+savings\b/g, 'equitysavings'],
 ];
 
 /**

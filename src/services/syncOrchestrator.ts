@@ -15,6 +15,7 @@ import { createProgressCallback } from '@/utils/progressTracker';
 import type { GrowwScheme } from '@/types/api';
 import type { MutualFund } from '@/types/mutualFund';
 import type { FundHoldings } from '@/types/holdings';
+import type { RedirectedFund } from '@/services/groww';
 
 export type SyncStep = 'fetching' | 'enhancing' | 'processing' | 'exporting' | 'saving' | 'complete' | 'error';
 
@@ -78,7 +79,7 @@ export const executeSync = async (options: SyncOptions = {}): Promise<SyncResult
 
     // Step 2: Enhance & Process data
     reportProgress({ step: 'enhancing', stepLabel: 'Fetching enhanced data (stats & search)...', processed: 0, total: schemes.length, errors });
-    const { funds: processedFunds, holdings } = await processSchemesWithData(schemes, options, (step, processed, total, stepLabel) => {
+    const { funds: processedFunds, holdings, redirects } = await processSchemesWithData(schemes, options, (step, processed, total, stepLabel) => {
       reportProgress({ step, stepLabel: stepLabel || 'Fetching enhanced data (stats & search)...', processed, total, errors });
     });
 
@@ -112,6 +113,7 @@ export const executeSync = async (options: SyncOptions = {}): Promise<SyncResult
 
     reportProgress({ step: 'complete', stepLabel: 'Synchronization complete!', processed: processedFunds.length, total: processedFunds.length, errors });
     logSummary(result);
+    logRedirectReport(redirects, processedFunds);
     return result;
 
   } catch (error) {
@@ -162,7 +164,7 @@ const processSchemesWithData = async (
   schemes: GrowwScheme[],
   options: SyncOptions,
   onStepProgress?: (step: SyncStep, processed: number, total: number, stepLabel?: string) => void,
-): Promise<{ funds: MutualFund[]; holdings: Record<string, FundHoldings> }> => {
+): Promise<{ funds: MutualFund[]; holdings: Record<string, FundHoldings>; redirects: RedirectedFund[] }> => {
   console.log('\n🔄 Processing schemes with enhanced data...');
   
   if (options.signal?.aborted) throw new Error('Sync cancelled by user');
@@ -224,11 +226,11 @@ const processSchemesWithData = async (
 
   try {
     const dates = await fetchInceptionDates(options.signal);
-    return { funds: applyInceptionDates(processedFunds, dates).funds, holdings };
+    return { funds: applyInceptionDates(processedFunds, dates).funds, holdings, redirects: enhancedData.redirects };
   } catch (error) {
     if (options.signal?.aborted) throw new Error('Sync cancelled by user');
     console.warn('⚠️ Inception date enrichment failed; continuing without it:', error);
-    return { funds: processedFunds, holdings };
+    return { funds: processedFunds, holdings, redirects: enhancedData.redirects };
   }
 };
 
@@ -304,5 +306,97 @@ const logSummary = (result: SyncResult): void => {
   
   if (result.exportedFiles.length > 0) {
     console.log(`   • Exported files: ${result.exportedFiles.join(', ')}`);
+  }
+};
+
+/**
+ * Log a report of redirected/replaced funds and whether their
+ * replacement target ended up in the final dataset.
+ *
+ * Handles chained redirects (A → B → C) by walking the redirect map
+ * until the terminal destination is found.
+ */
+const logRedirectReport = (redirects: RedirectedFund[], funds: MutualFund[]): void => {
+  if (redirects.length === 0) return;
+
+  // Build a set of search_ids that made it into the dataset.
+  const datasetSearchIds = new Set<string>();
+  for (const f of funds) {
+    if (f.id) datasetSearchIds.add(f.id);
+  }
+
+  // Build a redirect map: oldId → redirect entry, so we can resolve chains.
+  const redirectMap = new Map<string, RedirectedFund>();
+  for (const r of redirects) {
+    redirectMap.set(r.oldId, r);
+  }
+
+  /**
+   * Walk the redirect chain from a starting redirect to its terminal
+   * destination. Returns the chain of hops and the final search_id/name.
+   * Guards against cycles with a visited set.
+   */
+  const resolveChain = (start: RedirectedFund): {
+    finalSearchId: string;
+    finalSchemeName: string | null;
+    chain: string[]; // intermediate scheme names for display
+  } => {
+    const visited = new Set<string>();
+    visited.add(start.oldId);
+
+    let current = start;
+    const chain: string[] = [];
+
+    while (redirectMap.has(current.newSearchId) && !visited.has(current.newSearchId)) {
+      // The target is itself redirected — follow the chain.
+      chain.push(current.newSchemeName ?? current.newSearchId);
+      visited.add(current.newSearchId);
+      current = redirectMap.get(current.newSearchId)!;
+    }
+
+    return {
+      finalSearchId: current.newSearchId,
+      finalSchemeName: current.newSchemeName,
+      chain,
+    };
+  };
+
+  // Only report "root" redirects — those whose oldId is not the target of
+  // another redirect. Intermediate hops are shown inline as part of the chain.
+  const rootRedirects = redirects.filter((r) => {
+    for (const other of redirects) {
+      if (other.newSearchId === r.oldId) return false;
+    }
+    return true;
+  });
+
+  console.log(`\n🔀 Redirected / replaced funds: ${redirects.length} (${rootRedirects.length} unique chains)`);
+  console.log('─'.repeat(100));
+
+  let inDataset = 0;
+  let missing = 0;
+
+  for (const r of rootRedirects) {
+    const { finalSearchId, finalSchemeName, chain } = resolveChain(r);
+    const found = datasetSearchIds.has(finalSearchId);
+    if (found) inDataset++;
+    else missing++;
+
+    const status = found ? '✅ in dataset' : '❌ NOT in dataset';
+    const finalLabel = finalSchemeName ?? finalSearchId;
+
+    if (chain.length > 0) {
+      // Multi-hop: show the full path
+      const hops = [r.oldSchemeName, ...chain, finalLabel].join(' → ');
+      console.log(`  ${hops}  [${status}]`);
+    } else {
+      console.log(`  ${r.oldSchemeName}  → ${finalLabel}  [${status}]`);
+    }
+  }
+
+  console.log('─'.repeat(100));
+  console.log(`  ${inDataset} redirect target(s) present in dataset, ${missing} missing.`);
+  if (missing > 0) {
+    console.log('  Missing targets may be regular-plan or non-direct schemes that we intentionally exclude.');
   }
 };
